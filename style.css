@@ -9,10 +9,6 @@ html {
   color: rgb(51, 51, 51);
 }
 
-.lazy-grid {
-    height: 40rem;
-}
-
 /* fixed size row */
 table tr th:nth-child(1),
 table tr td:nth-child(1) {
