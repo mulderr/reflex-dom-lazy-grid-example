@@ -69,7 +69,7 @@ grid klass rowHeight gridHeight dcols dxs = do
 
       scrollTop <- holdDyn 0 =<< debounce debounceDelay (domEvent Scroll gridBody)
       pos <- mapDyn (`div` rowHeight) scrollTop
-      window <- holdDyn Map.empty =<< return . updated =<< combineDyn toWindow dxs pos
+      window <- combineDyn toWindow dxs pos
 
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop dxsSize
 
