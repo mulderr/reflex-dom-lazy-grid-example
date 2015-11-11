@@ -47,17 +47,12 @@ grid klass rowHeight gridHeight dcols dxs = do
 
   rec -- TODO: make the grid 100% height
       --
-      -- both will cause a deadlock
-      --scrollPos <- holdDyn 0 =<< debounce 0.01 (domEvent Scroll gridBody)
-      --bodyHeight <- getClientHeight $ _el_element gridBody
+      -- circular refs:
+      -- window > pos > scrollTop > gridBody > window
+      -- rowgroupAttrs > scrollTop > gridBody > rowgroupAttrs
 
-      scrollTop <- holdDyn 0 (domEvent Scroll gridBody)
-      pos <- mapDyn (`div` rowHeight) scrollTop
-      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop dxsSize
-      window <- combineDyn toWindow dxs pos
-      
-      gridBody <- elAttr "div" toGridAttrs $
-        elAttr "table" ("class" =: klass) $ do
+      gridBody <- elAttr "div" gridAttrs $
+        elClass "table" klass $ do
           el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ text (colHeader c)
 
@@ -72,15 +67,24 @@ grid klass rowHeight gridHeight dcols dxs = do
 
           return tbody
 
+      scrollTop <- holdDyn 0 =<< debounce debounceDelay (domEvent Scroll gridBody)
+      pos <- mapDyn (`div` rowHeight) scrollTop
+      window <- holdDyn Map.empty =<< return . updated =<< combineDyn toWindow dxs pos
+
+      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop dxsSize
+
+      --bodyHeight <- getClientHeight $ _el_element gridBody
+
   text "scrollTop: "; display scrollTop
   text "; rowIndex: "; display pos
   return ()
 
   where
+    debounceDelay = 0.04 -- 40ms caps it at around 25Hz
     windowSize = gridHeight `div` rowHeight + 1
     toWindow rs p = Map.fromList $ take windowSize $ drop p $ Map.toList rs
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
-    toGridAttrs = "class" =: "lazy-grid" <> toStyleAttr ("height" =: (show gridHeight <> "px"))
+    gridAttrs = "class" =: "lazy-grid" <> toStyleAttr ("height" =: (show gridHeight <> "px"))
     toRowgroupAttrs scrollPosition rowCount = 
       let height = rowHeight * rowCount - scrollPosition
       in toStyleAttr $ "position" =: "relative"
@@ -100,11 +104,9 @@ mkCol name val = def
 --
 -- | Block occurrences of an Event until th given number of seconds elapses without
 --   the Event firing, at which point the last occurrence of the Event will fire.
-{-
 debounce :: MonadWidget t m => NominalDiffTime -> Event t a -> m (Event t a)
 debounce dt e = do
   n :: Dynamic t Integer <- count e
   let tagged = attachDynWith (,) n e
   delayed <- delay dt tagged
   return $ attachWithMaybe (\n' (t, v) -> if n' == t then Just v else Nothing) (current n) delayed
--}
