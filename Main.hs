@@ -46,7 +46,7 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
   xs' <- forDyn (xs :: Dynamic Spider [Employee]) $ \xs ->
            Map.fromList $ zip [1..] xs
 
-  grid "my-grid" "table" 30 (constDyn columns) xs'
+  grid "my-grid" "table" 30 10 (constDyn columns) xs'
 
 
 columns :: Map Int (GridColumn Int Employee)

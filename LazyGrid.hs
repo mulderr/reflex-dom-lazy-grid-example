@@ -36,15 +36,18 @@ instance Default (GridColumn k v) where
     }
 
 -- Lazy grid - based on virtualList.
+-- 
+-- Uses resizeDetector to keep track of height and renders only as many rows as needed.
 grid :: (MonadWidget t m, Ord k, Show k)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
+  -> Int                                    -- ^ extra rows rendered on top and bottom
   -> Dynamic t (Map k (GridColumn k v))     -- ^ column spec
   -> Dynamic t (Map k v)                    -- ^ rows
   -> m ()
-grid containerClass tableClass rowHeight dcols dxs = do
-  dxsSize <- mapDyn size dxs
+grid containerClass tableClass rowHeight extra dcols dxs = do
+  rowCount <- mapDyn size dxs
 
   tnow <- liftIO $ getCurrentTime
 
@@ -56,7 +59,11 @@ grid containerClass tableClass rowHeight dcols dxs = do
       (gridResizeEvent, gridBody) <- resizeDetectorAttr ("class" =: "my-grid") $
         elClass "table" tableClass $ do
           el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
-            sample (current dc) >>= \c -> el "th" $ text (colHeader c)
+            sample (current dc) >>= \c -> el "th" $ do
+              el "div" $ text (colHeader c)
+              filterInput <- textInput $ def & attributes .~ constDyn (mconcat ["class" =: "grid-filter"])
+              return ()
+
 
           (tbody, _) <- el' "tbody" $
             elDynAttr "rowgroup" rowgroupAttrs $ do
@@ -70,35 +77,42 @@ grid containerClass tableClass rowHeight dcols dxs = do
           return tbody
 
       scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll gridBody)
-      pos <- mapDyn (`div` rowHeight) scrollTop
-      window <- combineDyn toWindow dxs =<< combineDyn (\x y -> (x, y)) pos tbodyHeight
+      params <- combineDyn (,) scrollTop tbodyHeight
+      window <- combineDyn toWindow params dxs
 
-      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop dxsSize
+      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
       resizeE <- performEvent $ mapHeight gridBody gridResizeEvent
       initHeightE <- performEvent . mapHeight gridBody =<< getPostBuild
       tbodyHeight <- holdDyn 0 $ leftmost [resizeE, initHeightE]
 
-      
-  text "scrollTop: "; display scrollTop
-  text "; rowIndex: "; display pos
-  text "; tbodyHeight: "; display tbodyHeight
-  text "; windowSize: "; display =<< mapDyn size window
   return ()
 
   where
     scrollDebounceDelay = 0.04 -- 40ms caps it at around 25Hz
+    toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
-    windowSize canvasHeight = canvasHeight `div` rowHeight + 1
-    toWindow rs (p, h) = Map.fromList $ take (windowSize $ ceiling h) $ drop p $ Map.toList rs
-    toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
-    toRowgroupAttrs scrollPosition rowCount = 
-      let height = rowHeight * rowCount - scrollPosition
+
+    -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
+    toWindow (scrollTop, tbodyHeight) =
+      let d = scrollTop `div` rowHeight - extra
+          x = fromEnum $ odd d
+          skip = d - x
+          wsize = (ceiling tbodyHeight) `div` rowHeight + 1 + x + extra
+      in Map.fromList . take wsize . drop skip . Map.toList
+
+    toRowgroupAttrs scrollTop rowCount = 
+      let total = rowCount * rowHeight
+          (d, pad) = scrollTop `divMod` rowHeight
+          x = fromEnum $ odd d
+          woffset = capAtZero $ scrollTop - pad - (extra + x) * rowHeight
+          wheight = total - woffset
+          capAtZero x = if x < 0 then 0 else x
       in toStyleAttr $ "position" =: "relative"
                     <> "overflow" =: "hidden"
-                    <> "height"   =: (show height <> "px")
-                    <> "top"      =: (show scrollPosition <> "px")
+                    <> "top"      =: (show woffset <> "px")
+                    <> "height"   =: (show wheight <> "px")
 
 
 mkCol :: String -> (k -> v -> String) -> GridColumn k v
