@@ -49,8 +49,6 @@ grid :: (MonadWidget t m, Ord k, Show k)
 grid containerClass tableClass rowHeight extra dcols dxs = do
   rowCount <- mapDyn size dxs
 
-  tnow <- liftIO $ getCurrentTime
-
   rec -- circular refs:
       -- window > pos > scrollTop > gridBody > window
       -- rowgroupAttrs > scrollTop > gridBody > rowgroupAttrs
