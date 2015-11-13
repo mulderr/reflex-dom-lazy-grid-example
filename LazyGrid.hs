@@ -54,7 +54,7 @@ grid containerClass tableClass rowHeight extra dcols dxs = do
       -- rowgroupAttrs > scrollTop > gridBody > rowgroupAttrs
       -- ...
 
-      (gridResizeEvent, gridBody) <- resizeDetectorAttr ("class" =: "my-grid") $
+      (gridResizeEvent, gridBody) <- resizeDetectorAttr ("class" =: containerClass) $
         elClass "table" tableClass $ do
           el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ do
