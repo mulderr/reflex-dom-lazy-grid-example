@@ -59,10 +59,8 @@ grid containerClass tableClass rowHeight extra dcols drows = do
             sample (current dc) >>= \c -> el "th" $ do
               el "div" $ text (colHeader c)
               dfilter <- case colFilter c of
-                Just f -> do
-                  filterInput <- textInput $ def & attributes .~ constDyn (mconcat [ "class" =: "grid-filter" ])
-                  return $ _textInput_value filterInput 
-                Nothing -> return $ constDyn ""
+                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn (mconcat [ "class" =: "grid-filter" ]))
+                Nothing -> return $ constDyn $ ""
 
               return dfilter
 
