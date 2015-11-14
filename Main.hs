@@ -3,10 +3,13 @@
 module Main where
 
 import Data.Aeson
+import Data.Char (toLower)
 import Data.FileEmbed
 import qualified Data.HashMap as HM
+import Data.List (isInfixOf)
 import Data.Maybe (fromJust)
-import Data.Map as Map
+import Data.Map (Map)
+import qualified Data.Map as Map
 
 import Reflex
 import Reflex.Dom
@@ -51,9 +54,26 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
 
 columns :: Map Int (GridColumn Int Employee)
 columns = Map.fromList $ zip [1..]
-  [ mkCol "ID"          (\k _ -> show k)
-  , mkCol "First name"  (\_ -> firstName)
-  , mkCol "Last name"   (\_ -> lastName)
-  , mkCol "Company"     (\_ -> company)
-  , mkCol "Employed"    (\_ -> show . employed)
+  [ def { colHeader = "No."
+        , colValue = (\k _ -> show k) 
+        }
+  , def { colHeader = "First name"
+        , colValue = const firstName
+        , colFilter = Just $ matchIgnoreCase firstName
+        }
+  , def { colHeader = "Last name"
+        , colValue = const lastName
+        , colFilter = Just $ matchIgnoreCase lastName
+        }
+  , def { colHeader = "Company"
+        , colValue = const company
+        , colFilter = Just $ matchIgnoreCase company
+        }
+  , def { colHeader = "Employed"
+        , colValue = (\_ -> show . fromEnum . employed)
+        , colFilter = Just $ (\s -> Map.filter $ (==) s . show . fromEnum . employed)
+        }
   ]
+
+matchIgnoreCase :: (Employee -> String) -> String -> Map Int Employee -> Map Int Employee
+matchIgnoreCase f s = Map.filter $ isInfixOf (map toLower s) . (map toLower) . f

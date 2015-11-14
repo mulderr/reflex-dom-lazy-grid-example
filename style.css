@@ -97,6 +97,7 @@ table th {
     height: 4rem;
     background: -webkit-gradient(linear, 0% 100%, 0% 0%, from(rgb(238, 238, 238)), to(rgb(255, 255, 255))) padding-box;
     text-align: left;
+    vertical-align: top;
 }
 
 /*

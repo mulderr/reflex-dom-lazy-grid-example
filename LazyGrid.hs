@@ -17,20 +17,20 @@ import GHCJS.DOM.Element hiding (drop)
 
 
 data GridColumn k v = GridColumn
-  { colName :: String
-  , colHeader :: String
-  , colValue :: k -> v -> String              -- ^ column string value for display, can use row key and value
-  , colCompare :: Maybe (v -> v -> Ordering)
+  { colHeader :: String
+  , colValue :: k -> v -> String                      -- ^ column string value for display, can use row key and value
+  , colCompare :: Maybe (v -> v -> Ordering)          -- ^ would it be nicer to just use ord or do we need more flexibility?
+  , colFilter :: Maybe (String -> Map k v -> Map k v) -- ^ filtering function
   , colWidth :: Maybe Int
   , colVisible :: Bool
   }
 
 instance Default (GridColumn k v) where
   def = GridColumn
-    { colName = ""
-    , colHeader = ""
+    { colHeader = ""
     , colValue = (\_ _ -> "")
     , colCompare = Nothing
+    , colFilter = Nothing
     , colWidth = Nothing
     , colVisible = True
     }
@@ -46,22 +46,25 @@ grid :: (MonadWidget t m, Ord k, Show k)
   -> Dynamic t (Map k (GridColumn k v))     -- ^ column spec
   -> Dynamic t (Map k v)                    -- ^ rows
   -> m ()
-grid containerClass tableClass rowHeight extra dcols dxs = do
-  rowCount <- mapDyn size dxs
-
+grid containerClass tableClass rowHeight extra dcols drows = do
   rec -- circular refs:
-      -- window > pos > scrollTop > gridBody > window
-      -- rowgroupAttrs > scrollTop > gridBody > rowgroupAttrs
+      -- window > pos > scrollTop > tbody > window
+      -- rowgroupAttrs > scrollTop > tbody > rowgroupAttrs
       -- ...
 
-      (gridResizeEvent, gridBody) <- resizeDetectorAttr ("class" =: containerClass) $
+      -- listWithKey :: (Ord k, MonadWidget t m) => Dynamic t (Map k v) -> (k -> Dynamic t v -> m a) -> m (Dynamic t (Map k a))
+      (gridResizeEvent, (tbody, dfilters)) <- resizeDetectorAttr ("class" =: containerClass) $
         elClass "table" tableClass $ do
-          el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
+          dfilters <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ do
               el "div" $ text (colHeader c)
-              filterInput <- textInput $ def & attributes .~ constDyn (mconcat ["class" =: "grid-filter"])
-              return ()
+              dfilter <- case colFilter c of
+                Just f -> do
+                  filterInput <- textInput $ def & attributes .~ constDyn (mconcat [ "class" =: "grid-filter" ])
+                  return $ _textInput_value filterInput 
+                Nothing -> return $ constDyn ""
 
+              return dfilter
 
           (tbody, _) <- el' "tbody" $
             elDynAttr "rowgroup" rowgroupAttrs $ do
@@ -72,17 +75,23 @@ grid containerClass tableClass rowHeight extra dcols dxs = do
 
               return ()
 
-          return tbody
+          return (tbody, dfilters)
 
-      scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll gridBody)
+      rowCount <- mapDyn size dxs
+
+      scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
       params <- combineDyn (,) scrollTop tbodyHeight
       window <- combineDyn toWindow params dxs
 
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
-      resizeE <- performEvent $ mapHeight gridBody gridResizeEvent
-      initHeightE <- performEvent . mapHeight gridBody =<< getPostBuild
+      resizeE <- performEvent $ mapHeight tbody gridResizeEvent
+      initHeightE <- performEvent . mapHeight tbody =<< getPostBuild
       tbodyHeight <- holdDyn 0 $ leftmost [resizeE, initHeightE]
+
+      -- dfilters is a Dynamic Map from column key to Dynamic String
+      drc <- combineDyn (,) drows dcols
+      dxs <- combineDyn applyFilters drc (joinDynThroughMap dfilters)
 
   return ()
 
@@ -112,13 +121,13 @@ grid containerClass tableClass rowHeight extra dcols dxs = do
                     <> "top"      =: (show woffset <> "px")
                     <> "height"   =: (show wheight <> "px")
 
-
-mkCol :: String -> (k -> v -> String) -> GridColumn k v
-mkCol name val = def 
-  { colName = name
-  , colHeader = name
-  , colValue = val
-  }
+    applyFilters (xs, cols) fs = Map.foldrWithKey (applyOne cols) xs fs
+    applyOne _ _ "" xs = xs
+    applyOne cols k s xs = case Map.lookup k cols of
+                              Just c -> case colFilter c of
+                                          Just f -> f s xs
+                                          Nothing -> xs
+                              Nothing -> xs
 
 
 --
@@ -139,7 +148,7 @@ debounce dt e = do
 -- * updated for ghcjs 0.2
 -- * added resizeDetectorAttr as the most general version
 -- * removed hardcoded position: relative - one may want to specify position: absolute
--- * replaced wrapDomEvent with domEvent
+-- * replaced wrapDomEvent with domEvent - i admit i dont know why would one use one over the other
 --
 -- | A widget that wraps the given widget in a div and fires an event when resized.
 --   Adapted from github.com/marcj/css-element-queries
