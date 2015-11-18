@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RecursiveDo #-}
 module Main where
 
 import Data.Aeson
@@ -23,6 +24,7 @@ data Employee = Employee
   , company :: String
   , employed :: Bool
   }
+  deriving (Show)
 
 instance FromJSON Employee where
   parseJSON (Object v) = Employee <$> v .: "firstName"
@@ -49,10 +51,10 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
   xs' <- forDyn (xs :: Dynamic Spider [Employee]) $ \xs ->
            Map.fromList $ zip [1..] xs
 
-  grid "my-grid" "table" 30 10 (constDyn columns) xs'
+  grid "my-grid" "table" 30 2 (constDyn columns) xs'
 
 
-columns :: Map Int (GridColumn Int Employee)
+columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
   [ def { colHeader = "No."
         , colValue = (\k _ -> show k) 
@@ -60,6 +62,7 @@ columns = Map.fromList $ zip [1..]
   , def { colHeader = "First name"
         , colValue = const firstName
         , colFilter = Just $ matchIgnoreCase firstName
+        , colCompare = Just $ (\a b -> firstName a `compare` firstName b)
         }
   , def { colHeader = "Last name"
         , colValue = const lastName
