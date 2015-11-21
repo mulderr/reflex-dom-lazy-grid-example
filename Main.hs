@@ -48,7 +48,7 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
   xs <- holdDyn (Just []) mresp >>= mapDyn fromJust
 
   xs' <- forDyn (xs :: Dynamic Spider [Employee]) $ \xs ->
-           Map.fromList $ zip [1..] xs
+           Map.fromList $ zip (map (\x -> (x, x)) [1..]) xs
 
   grid "my-grid" "table" 30 2 (constDyn columns) xs'
 
@@ -56,7 +56,7 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
   [ def { colHeader = "No."
-        , colValue = (\k _ -> show k) 
+        , colValue = (\(k, _) _ -> show k) 
         }
   , def { colHeader = "First name"
         , colValue = const firstName
@@ -80,5 +80,5 @@ columns = Map.fromList $ zip [1..]
         }
   ]
 
-matchIgnoreCase :: (Employee -> String) -> String -> Map Int Employee -> Map Int Employee
+matchIgnoreCase :: (Employee -> String) -> String -> Map (Int, Int) Employee -> Map (Int, Int) Employee
 matchIgnoreCase f s = Map.filter $ isInfixOf (map toLower s) . (map toLower) . f

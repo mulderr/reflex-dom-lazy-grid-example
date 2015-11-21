@@ -19,10 +19,9 @@ import GHCJS.DOM.Element hiding (drop)
 
 data Column k v = Column
   { colHeader :: String
-  , colValue :: k -> v -> String                      -- ^ column string value for display, can use row key and value
+  , colValue :: (k, k) -> v -> String                      -- ^ column string value for display, can use row key and value
   , colCompare :: Maybe (v -> v -> Ordering)          -- ^ would it be nicer to just use ord or do we need more flexibility?
-  , colFilter :: Maybe (String -> Map k v -> Map k v) -- ^ filtering function
-  , colWidth :: Maybe Int
+  , colFilter :: Maybe (String -> Map (k, k) v -> Map (k, k) v) -- ^ filtering function
   , colVisible :: Bool
   }
 
@@ -32,7 +31,6 @@ instance Default (Column k v) where
     , colValue = (\_ _ -> "")
     , colCompare = Nothing
     , colFilter = Nothing
-    , colWidth = Nothing
     , colVisible = True
     }
 
@@ -66,13 +64,13 @@ nextSort s = succ s
 --
 -- TODO:
 -- - probably use virtual list style diff Event for updates instead of a Dynamic window, how much does it affect peformance?
-grid :: (MonadWidget t m, Ord k, Show k, Default k, Show v)
+grid :: (MonadWidget t m, Ord k, Show k, Default k, Enum k, Num k, Show v)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
   -> Int                                    -- ^ extra rows rendered on top and bottom
   -> Dynamic t (Map k (Column k v))         -- ^ column spec
-  -> Dynamic t (Map k v)                    -- ^ rows
+  -> Dynamic t (Map (k, k) v)                    -- ^ rows
   -> m ()
 grid containerClass tableClass rowHeight extra dcols drows = do
   rec pb <- getPostBuild
@@ -187,13 +185,15 @@ grid containerClass tableClass rowHeight extra dcols drows = do
         Nothing -> xs
         Just f -> let es = Map.elems xs
                       ks = Map.keys xs
-                  in Map.fromList $ zip ks $ f es
+                  in Map.fromList $ reorder $ f $ Map.toList xs
       where
         maybeFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
-          case sortOrder of
+          let f' = (\(_, v1) (_, v2) -> f v1 v2)
+          in case sortOrder of
             SortNone -> Nothing
-            SortAsc -> return $ sortBy f
-            SortDesc -> return $ sortBy (flip f)
+            SortAsc -> return $ sortBy f'
+            SortDesc -> return $ sortBy (flip f')
+        reorder = zipWith (\n ((k1, k2), v) -> ((n, k2), v)) [1..]
 
     toSortIndicator k (ck, v) = if ck == k
       then case v of
