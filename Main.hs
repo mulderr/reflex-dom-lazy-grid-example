@@ -6,7 +6,6 @@ module Main where
 import Data.Aeson
 import Data.Char (toLower)
 import Data.FileEmbed
-import qualified Data.HashMap as HM
 import Data.List (isInfixOf)
 import Data.Maybe (fromJust)
 import Data.Map (Map)
@@ -67,14 +66,17 @@ columns = Map.fromList $ zip [1..]
   , def { colHeader = "Last name"
         , colValue = const lastName
         , colFilter = Just $ matchIgnoreCase lastName
+        , colCompare = Just $ (\a b -> lastName a `compare` lastName b)
         }
   , def { colHeader = "Company"
         , colValue = const company
         , colFilter = Just $ matchIgnoreCase company
+        , colCompare = Just $ (\a b -> company a `compare` company b)
         }
   , def { colHeader = "Employed"
         , colValue = (\_ -> show . fromEnum . employed)
         , colFilter = Just $ (\s -> Map.filter $ (==) s . show . fromEnum . employed)
+        , colCompare = Just $ (\a b -> employed a `compare` employed b)
         }
   ]
 

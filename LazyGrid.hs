@@ -51,9 +51,21 @@ nextSort s = succ s
 
 
 
--- Lazy grid - based on virtualList code but without fixed height.
+-- Lazy grid - based on virtualList code.
 -- 
--- Uses resizeDetector to keep track of height and renders as many rows as needed.
+-- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
+--
+-- Terminology:
+-- - window - the rows to be rendered given tbody height, scroll position and (filtered, sorted) data
+--
+-- Why not reuse virtualList:
+-- - hardocded divs break semantic markup
+-- - positions each row absolute based on key which causes problems when filtering
+-- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row
+-- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
+--
+-- TODO:
+-- - probably use virtual list style diff Event for updates instead of a Dynamic window, how much does it affect peformance?
 grid :: (MonadWidget t m, Ord k, Show k, Default k, Show v)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
@@ -63,14 +75,8 @@ grid :: (MonadWidget t m, Ord k, Show k, Default k, Show v)
   -> Dynamic t (Map k v)                    -- ^ rows
   -> m ()
 grid containerClass tableClass rowHeight extra dcols drows = do
-  rec -- circular refs:
-      -- window > pos > scrollTop > tbody > window
-      -- rowgroupAttrs > scrollTop > tbody > rowgroupAttrs
-      -- ...
-
-      pb <- getPostBuild
-      performEvent $ fmap (\xs -> liftIO $ print "yoink dcols") $ updated dcols
-
+  rec pb <- getPostBuild
+      
       -- listWithKey :: (Ord k, MonadWidget t m) => Dynamic t (Map k v) -> (k -> Dynamic t v -> m a) -> m (Dynamic t (Map k a))
       (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $
         elClass "table" tableClass $ do
@@ -88,11 +94,6 @@ grid containerClass tableClass rowHeight extra dcols drows = do
                 Nothing -> return $ constDyn $ ""
 
               let sortEvent = tag (constant k) . domEvent Click $ sortEl
-              -- debug
-              performEvent $ fmap (\_ -> do
-                (k, so) <- sample $ current sortState
-                liftIO $ print $ "sort column " <> show k <> " " <> show so
-                ) sortEvent
 
               -- for each column we return:
               -- - filter string :: Dynamic t String
@@ -100,23 +101,11 @@ grid containerClass tableClass rowHeight extra dcols drows = do
               return (dfilter, sortEvent)
 
           (tbody, _) <- el' "tbody" $
-            elDynAttr "rowgroup" rowgroupAttrs $ do
-
+            elDynAttr "rowgroup" rowgroupAttrs $
               listWithKey window $ \k dv -> sample (current dv) >>= \v -> do
-                -- debug
-                performEvent $ fmap (\xs -> liftIO $ print "yoink row") $ updated dv
-
-                -- apparently this part does not always run when window is updated... um, why?
-                x <- el "tr" $ listWithKey dcols $ \_ dc ->
+                el "tr" $ listWithKey dcols $ \_ dc ->
                   sample (current dc) >>= \c ->
                     el "td" $ text ((colValue c) k v)
-
-                -- debug - see above, this should be printed when sorting but isnt
-                performEvent $ fmap (\xs -> liftIO $ print "yoink x") $ updated x
-
-                return ()
-
-              return ()
 
           return (tbody, dcontrols)
 
@@ -127,7 +116,7 @@ grid containerClass tableClass rowHeight extra dcols drows = do
       window <- combineDyn toWindow params dxs
 
       -- debug
-      performEvent $ fmap (\xs -> liftIO $ print "yoink window") $ updated window
+      performEvent $ fmap (liftIO . print) $ updated window
 
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
@@ -147,15 +136,13 @@ grid containerClass tableClass rowHeight extra dcols drows = do
       sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) ess
       dxs <- combineDyn applySort drc' sortState
 
-      --performEvent $ fmap (\xs -> liftIO $ print $ show xs) $ updated window
-
   return ()
 
   where
     scrollDebounceDelay = 0.04 -- 40ms caps it at around 25Hz
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
-    mapHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
+    mapHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
     toWindow (scrollTop, tbodyHeight) =
@@ -189,65 +176,40 @@ grid containerClass tableClass rowHeight extra dcols drows = do
     -- - k is the column key
     -- - only one column can be sorted at a time
     -- - whenever we switch to another column SortOrder is reset to SortAsc
+    toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (k, SortOrder))
     toSortState = foldDyn (\k (pk, v) -> if k == pk then (k, nextSort v) else (k, SortAsc)) (def, def)
 
+    -- note to self:
+    -- listWithKey performs equality checks based on keys not values!
+    -- If you dont update keys it will not re-render items
     applySort (xs, cols) (k, sortOrder) =
       case (maybeFunc k cols) of
         Nothing -> xs
         Just f -> let es = Map.elems xs
                       ks = Map.keys xs
                   in Map.fromList $ zip ks $ f es
-      where maybeFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
-              case sortOrder of
-                SortNone -> Nothing
-                SortAsc -> return $ sortBy f
-                SortDesc -> return $ sortBy (flip f)
+      where
+        maybeFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
+          case sortOrder of
+            SortNone -> Nothing
+            SortAsc -> return $ sortBy f
+            SortDesc -> return $ sortBy (flip f)
 
     toSortIndicator k (ck, v) = if ck == k
       then case v of
              SortNone -> ""
              SortAsc -> "\x25be"  -- small triangle down
              SortDesc -> "\x25b4" -- small triangle up
-      else def
+      else ""
 
 
-
-
---
--- TODO: copied from current develop branch, remove after updating reflex-dom
---
-
--- | Block occurrences of an Event until th given number of seconds elapses without
---   the Event firing, at which point the last occurrence of the Event will fire.
-debounce :: MonadWidget t m => NominalDiffTime -> Event t a -> m (Event t a)
-debounce dt e = do
-  n :: Dynamic t Integer <- count e
-  let tagged = attachDynWith (,) n e
-  delayed <- delay dt tagged
-  return $ attachWithMaybe (\n' (t, v) -> if n' == t then Just v else Nothing) (current n) delayed
-
-
--- Changelog
--- * updated for ghcjs 0.2
--- * added resizeDetectorAttr as the most general version
--- * removed hardcoded position: relative - one may want to specify position: absolute
--- * replaced wrapDomEvent with domEvent - i admit i dont know why would one use one over the other
---
--- | A widget that wraps the given widget in a div and fires an event when resized.
---   Adapted from github.com/marcj/css-element-queries
-resizeDetector :: MonadWidget t m => m a -> m (Event t (), a)
-resizeDetector = resizeDetectorAttr Map.empty
-
-resizeDetectorWithStyle :: MonadWidget t m
-  => String -- ^ A css style string. Warning: It must contain the "position" attribute with value either "absolute" or "relative".
-  -> m a
-  -> m (Event t (), a)
-resizeDetectorWithStyle styleString = resizeDetectorAttr ("style" =: styleString)
-
+-- more general version of resizeDetectorWithStyle
+-- need to specify class
+-- caller is responsible for somehow setting position: relative or position: absolute
 resizeDetectorAttr :: MonadWidget t m
   => Map String String -- ^ Element attributes. Warning: It must specifiy the "position" attribute with value either "absolute" or "relative".
   -> m a -- ^ The embedded widget
-  -> m (Event t (), a) -- ^ An 'Event' that fires on resize, and the result of the embedded widget  
+  -> m (Event t (), a) -- ^ An 'Event' that fires on resize, and the result of the embedded widget
 resizeDetectorAttr attrs w = do
   let childStyle = "position: absolute; left: 0; top: 0;"
       containerAttrs = "style" =: "position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: scroll; z-index: -1; visibility: hidden;"
@@ -260,31 +222,31 @@ resizeDetectorAttr attrs w = do
   let reset = do
         let e = _el_element expand
             s = _el_element shrink
-        eow <- getOffsetWidth e
-        eoh <- getOffsetHeight e
+        eow <- elementGetOffsetWidth e
+        eoh <- elementGetOffsetHeight e
         let ecw = eow + 10
             ech = eoh + 10
-        setAttribute (_el_element expandChild) "style" (childStyle <> "width: " <> show ecw <> "px;" <> "height: " <> show ech <> "px;")
-        esw <- getScrollWidth e
-        setScrollLeft e esw
-        esh <- getScrollHeight e
-        setScrollTop e esh
-        ssw <- getScrollWidth s
-        setScrollLeft s ssw
-        ssh <- getScrollHeight s
-        setScrollTop s ssh
-        lastWidth <- getOffsetWidth (_el_element parent)
-        lastHeight <- getOffsetHeight (_el_element parent)
+        elementSetAttribute (_el_element expandChild) "style" (childStyle <> "width: " <> show ecw <> "px;" <> "height: " <> show ech <> "px;")
+        esw <- elementGetScrollWidth e
+        elementSetScrollLeft e esw
+        esh <- elementGetScrollHeight e
+        elementSetScrollTop e esh
+        ssw <- elementGetScrollWidth s
+        elementSetScrollLeft s ssw
+        ssh <- elementGetScrollHeight s
+        elementSetScrollTop s ssh
+        lastWidth <- elementGetOffsetWidth (_el_element parent)
+        lastHeight <- elementGetOffsetHeight (_el_element parent)
         return (Just lastWidth, Just lastHeight)
       resetIfChanged ds = do
-        pow <- getOffsetWidth (_el_element parent)
-        poh <- getOffsetHeight (_el_element parent)
+        pow <- elementGetOffsetWidth (_el_element parent)
+        poh <- elementGetOffsetHeight (_el_element parent)
         if ds == (Just pow, Just poh)
            then return Nothing
            else liftM Just reset
   pb <- getPostBuild
-  let expandScroll = domEvent Scroll expand
-      shrinkScroll = domEvent Scroll shrink
+  expandScroll <- wrapDomEvent (_el_element expand) elementOnscroll $ return ()
+  shrinkScroll <- wrapDomEvent (_el_element shrink) elementOnscroll $ return ()
   size0 <- performEvent $ fmap (const $ liftIO reset) pb
   rec resize <- performEventAsync $ fmap (\d cb -> liftIO $ cb =<< resetIfChanged d) $ tag (current dimensions) $ leftmost [expandScroll, shrinkScroll]
       dimensions <- holdDyn (Nothing, Nothing) $ leftmost [ size0, fmapMaybe id resize ]
