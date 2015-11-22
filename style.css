@@ -17,7 +17,7 @@ html {
   left: 0;
 }
 
-table thead th .grid-filter {
+table thead th .grid-col-filter {
   width: 100%;
   box-sizing: border-box;
   margin: 0.25rem 0;
@@ -121,12 +121,20 @@ table tbody rowgroup {
 /*
  * sorting
  */
-.sort-icon {
+.grid-col-sort-icon {
   margin-left: 0.5em;
 }
 
-.col-title {
-  cursor: pointer;
+.grid-col-sort-icon-asc:before {
+  content: "\25be";
+}
+
+.grid-col-sort-icon-desc:before {
+  content: "\25b4";
+}
+
+.grid-col-title {
+  cursor: default;
 
   -webkit-touch-callout: none;
   -webkit-user-select: none;
@@ -134,4 +142,56 @@ table tbody rowgroup {
   -moz-user-select: none;
   -ms-user-select: none;
   user-select: none;
+}
+
+.grid-col-title-sort {
+  cursor: pointer;
+}
+
+/*
+ * menu
+ */
+.grid-menu-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0.5rem;
+  border: 1px solid rgb(212, 212, 212);
+  background-color: #eee;
+  font-weight: bold;
+}
+
+.grid-menu-toggle:before {
+  content: " \2630";
+}
+
+.grid-menu {
+  position: absolute;
+  top: 2em;
+  right: 1em;
+  display: none;
+  border: 1px solid rgb(212, 212, 212);
+  background-color: #eee;
+}
+
+.grid-menu-open {
+  display: block !important;
+  z-index: 100;
+  box-shadow: 3px 3px 3px #888;
+}
+
+.grid-menu-list {
+  padding: 0;
+  margin: 0;
+}
+
+.grid-menu-list li {
+  list-style-type: none;
+  border-bottom: 1px solid rgb(212, 212, 212);
+  padding: 0.5em 1em;
+  cursor: pointer;
+}
+
+.grid-menu-col-visible:before {
+  content: "\2611\00a0";
 }

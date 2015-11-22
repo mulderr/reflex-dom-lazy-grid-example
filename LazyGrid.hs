@@ -19,8 +19,8 @@ import GHCJS.DOM.Element hiding (drop)
 
 data Column k v = Column
   { colHeader :: String
-  , colValue :: (k, k) -> v -> String                      -- ^ column string value for display, can use row key and value
-  , colCompare :: Maybe (v -> v -> Ordering)          -- ^ would it be nicer to just use ord or do we need more flexibility?
+  , colValue :: (k, k) -> v -> String                           -- ^ column string value for display, can use row key and value
+  , colCompare :: Maybe (v -> v -> Ordering)                    -- ^ would it be nicer to just use ord or do we need more flexibility?
   , colFilter :: Maybe (String -> Map (k, k) v -> Map (k, k) v) -- ^ filtering function
   , colVisible :: Bool
   }
@@ -49,7 +49,7 @@ nextSort s = succ s
 
 
 
--- Lazy grid - based on virtualList code.
+-- Lazy grid - based on virtualList code, styled after ui-grid.
 -- 
 -- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
 --
@@ -62,36 +62,61 @@ nextSort s = succ s
 -- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row
 -- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
 --
+-- Whats with the tuple key?
+-- - listWithKey does a shallow diff on keys and will not re-render rows unless the keys change
+-- - with Map k v sorting does not change the set of keys in any way thus the dom would not be updated
+-- - to work around the above we use a composite key (k, k) first component is used for ordering (see Ord for (a, a)), second
+--   is the row id (or original position), this way the map is always ordered according to current sort but listWithKey will
+--   notice changes
+-- - yes, it is awkard, i wonder if using listWithKeyShallowDiff would make this go away
+--
 -- TODO:
--- - probably use virtual list style diff Event for updates instead of a Dynamic window, how much does it affect peformance?
-grid :: (MonadWidget t m, Ord k, Show k, Default k, Enum k, Num k, Show v)
+-- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
+-- - performance tuning
+-- - column selection
+-- - export to csv
+grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k, Show v)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
   -> Int                                    -- ^ extra rows rendered on top and bottom
   -> Dynamic t (Map k (Column k v))         -- ^ column spec
-  -> Dynamic t (Map (k, k) v)                    -- ^ rows
+  -> Dynamic t (Map (k, k) v)               -- ^ rows
   -> m ()
 grid containerClass tableClass rowHeight extra dcols drows = do
-  rec pb <- getPostBuild
-      
-      -- listWithKey :: (Ord k, MonadWidget t m) => Dynamic t (Map k v) -> (k -> Dynamic t v -> m a) -> m (Dynamic t (Map k a))
-      (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $
+  pb <- getPostBuild
+  rec (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $ do
+        -- grid menu stub
+        el "div" $ do
+          (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
+          menuOpen <- toggle False (domEvent Click menuToggle)
+          menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
+          elDynAttr "div" menuAttrs $ do
+            elClass "ul" "grid-menu-list" $ do
+              el "li" $ text "Export all data as csv"
+              el "li" $ text "Export filtered data as csv"
+              listWithKey dcols $ \k dc ->
+                sample (current dc) >>= \c -> elDynAttr "li" (constDyn ("class" =: "grid-menu-col grid-menu-col-visible")) $ text $ colHeader c
+
         elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ do
 
               -- header and sort controls
-              (sortEl, _) <- elAttr' "div" ("class" =: "col-title") $ do
+              let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (colCompare c)
+              sortAttrs <- mapDyn (toSortIndicatorAttrs k) sortState
+              (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
                 text (colHeader c)
-                elClass "span" "sort-icon" $ (dynText =<< mapDyn (toSortIndicator k) sortState)
+                elDynAttr "span" sortAttrs $ return ()
+
+              let sortEvent = case colCompare c of
+                                Just _ -> tag (constant k) $ domEvent Click sortEl
+                                Nothing -> never
 
               -- filter controls
               dfilter <- case colFilter c of
-                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn (mconcat [ "class" =: "grid-filter" ]))
+                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn (mconcat [ "class" =: "grid-col-filter" ]))
                 Nothing -> return $ constDyn $ ""
-
-              let sortEvent = tag (constant k) . domEvent Click $ sortEl
 
               -- for each column we return:
               -- - filter string :: Dynamic t String
@@ -112,9 +137,6 @@ grid containerClass tableClass rowHeight extra dcols drows = do
       scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
       params <- combineDyn (,) scrollTop tbodyHeight
       window <- combineDyn toWindow params dxs
-
-      -- debug
-      performEvent $ fmap (liftIO . print) $ updated window
 
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
@@ -137,7 +159,7 @@ grid containerClass tableClass rowHeight extra dcols drows = do
   return ()
 
   where
-    scrollDebounceDelay = 0.04 -- 40ms caps it at around 25Hz
+    scrollDebounceDelay = 0.04
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
@@ -162,7 +184,8 @@ grid containerClass tableClass rowHeight extra dcols drows = do
                     <> "top"      =: (show woffset <> "px")
                     <> "height"   =: (show wheight <> "px")
 
-    applyFilters (xs, cols) cs = Map.foldrWithKey (applyOne cols) xs cs
+    applyFilters :: Ord k => (Map (k, k) v, Map k (Column k v)) -> Map k String -> Map (k, k) v
+    applyFilters (xs, cols) = Map.foldrWithKey (applyOne cols) xs
     applyOne _ _ "" xs = xs
     applyOne cols k s xs = case Map.lookup k cols of
                               Just c -> case colFilter c of
@@ -177,30 +200,27 @@ grid containerClass tableClass rowHeight extra dcols drows = do
     toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (k, SortOrder))
     toSortState = foldDyn (\k (pk, v) -> if k == pk then (k, nextSort v) else (k, SortAsc)) (def, def)
 
-    -- note to self:
-    -- listWithKey performs equality checks based on keys not values!
-    -- If you dont update keys it will not re-render items
+    applySort :: (Num k, Ord k, Enum k) => (Map (k, k) v, Map k (Column k v)) -> (k, SortOrder) -> Map (k, k) v
     applySort (xs, cols) (k, sortOrder) =
-      case (maybeFunc k cols) of
+      case (maybeSortFunc k cols) of
         Nothing -> xs
-        Just f -> let es = Map.elems xs
-                      ks = Map.keys xs
-                  in Map.fromList $ reorder $ f $ Map.toList xs
+        Just f -> Map.fromList $ reorder $ f $ Map.toList xs
       where
-        maybeFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
+        maybeSortFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
           let f' = (\(_, v1) (_, v2) -> f v1 v2)
           in case sortOrder of
             SortNone -> Nothing
             SortAsc -> return $ sortBy f'
             SortDesc -> return $ sortBy (flip f')
-        reorder = zipWith (\n ((k1, k2), v) -> ((n, k2), v)) [1..]
+        reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
 
-    toSortIndicator k (ck, v) = if ck == k
+    toSortIndicatorAttrs :: Eq k => k -> (k, SortOrder) -> Map String String
+    toSortIndicatorAttrs k (ck, v) = "class" =: ("grid-col-sort-icon" <> if ck == k
       then case v of
              SortNone -> ""
-             SortAsc -> "\x25be"  -- small triangle down
-             SortDesc -> "\x25b4" -- small triangle up
-      else ""
+             SortAsc -> " grid-col-sort-icon-asc"
+             SortDesc -> " grid-col-sort-icon-desc"
+      else "")
 
 
 -- more general version of resizeDetectorWithStyle
