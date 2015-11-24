@@ -80,8 +80,9 @@ grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k, Show v)
   -> Int                                    -- ^ extra rows rendered on top and bottom
   -> Dynamic t (Map k (Column k v))         -- ^ column spec
   -> Dynamic t (Map (k, k) v)               -- ^ rows
+  -> (Map k (Column k v) -> (k, k) -> Dynamic t v -> m a) -- ^ row creating action
   -> m ()
-grid containerClass tableClass rowHeight extra dcols drows = do
+grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $ do
         -- grid menu stub
@@ -93,6 +94,7 @@ grid containerClass tableClass rowHeight extra dcols drows = do
 
           elDynAttr "div" menuAttrs $ do
             elClass "ul" "grid-menu-list" $ do
+              el "li" $ text "Hi! I don't work yet ;/"
               exportEl <- el' "li" $ text "Export all data as csv"
               exportVisibleEl <- el' "li" $ text "Export filtered data as csv"
               toggles <- listWithKey dcols $ \k dc ->
@@ -128,10 +130,9 @@ grid containerClass tableClass rowHeight extra dcols drows = do
 
           (tbody, _) <- el' "tbody" $
             elDynAttr "rowgroup" rowgroupAttrs $
-              listWithKey window $ \k dv -> sample (current dv) >>= \v -> do
-                el "tr" $ listWithKey dcols $ \_ dc ->
-                  sample (current dc) >>= \c ->
-                    el "td" $ text ((colValue c) k v)
+              listWithKey window $ \k dv -> do
+                sample (current dcols) >>= \cs ->
+                  mkRow cs k dv
 
           return (tbody, dcontrols)
 

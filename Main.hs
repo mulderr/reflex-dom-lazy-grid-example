@@ -10,6 +10,7 @@ import Data.List (isInfixOf)
 import Data.Maybe (fromJust)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Data.Traversable (forM)
 
 import Reflex
 import Reflex.Dom
@@ -51,7 +52,10 @@ gridExample = do
 
   xs' <- forDyn xs $ Map.fromList . zip (map (\x -> (x, x)) [1..])
 
-  grid "my-grid" "table" 30 2 (constDyn columns) xs'
+  grid "my-grid" "table" 30 2 (constDyn columns) xs' $ \cs k dv -> do
+    v <- sample $ current dv
+    el "tr" $ forM (Map.elems cs) $ \c ->
+      el "td" $ text ((colValue c) k v)
 
 
 columns :: Map Int (Column Int Employee)
