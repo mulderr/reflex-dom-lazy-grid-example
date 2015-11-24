@@ -1,5 +1,4 @@
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 module LazyGrid where
 
 import Control.Monad (forM_, when, liftM)
@@ -8,7 +7,6 @@ import Data.Default
 import Data.List (sortBy)
 import Data.Map as Map
 import Data.Monoid ((<>))
-import Data.Time.Clock
 import qualified Data.Vector as V
 
 import Reflex
@@ -87,16 +85,21 @@ grid containerClass tableClass rowHeight extra dcols drows = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $ do
         -- grid menu stub
-        el "div" $ do
+        -- ghcjs cannot figure out t = Spider for Reflex t
+        (expE, expVisE, colToggles) <- el "div" $ do
           (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
-          menuOpen <- toggle False (domEvent Click menuToggle)
+          menuOpen <- toggle False $ domEvent Click menuToggle
           menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
+
           elDynAttr "div" menuAttrs $ do
             elClass "ul" "grid-menu-list" $ do
-              el "li" $ text "Export all data as csv"
-              el "li" $ text "Export filtered data as csv"
-              listWithKey dcols $ \k dc ->
-                sample (current dc) >>= \c -> elDynAttr "li" (constDyn ("class" =: "grid-menu-col grid-menu-col-visible")) $ text $ colHeader c
+              exportEl <- el' "li" $ text "Export all data as csv"
+              exportVisibleEl <- el' "li" $ text "Export filtered data as csv"
+              toggles <- listWithKey dcols $ \k dc ->
+                sample (current dc) >>= \c -> el "div" $ do
+                  (toggleEl, _) <- elAttr' "li" ("class" =: "grid-menu-col grid-menu-col-visible") $ text $ colHeader c
+                  return toggleEl -- $ domEvent Click toggleEl
+              return (exportEl, exportVisibleEl, toggles)
 
         elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->

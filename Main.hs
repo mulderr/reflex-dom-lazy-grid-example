@@ -33,7 +33,10 @@ instance FromJSON Employee where
 
 
 main :: IO ()
-main = mainWidgetWithCss $(embedFile "style.css") $ do
+main = mainWidgetWithCss $(embedFile "style.css") gridExample
+
+gridExample :: MonadWidget t m => m ()
+gridExample = do
   clickEvent <- el "div" $ do
     button "Refresh"
 
@@ -41,14 +44,12 @@ main = mainWidgetWithCss $(embedFile "style.css") $ do
 
   -- fetch event occurs on page load and every time we click the refresh button
   let req = xhrRequest "GET" "500.json" def
-      fetchEvent = appendEvents clickEvent pb
-  asyncReq <- performRequestAsync (tag (constant req) fetchEvent)
+  asyncReq <- performRequestAsync $ tag (constant req) $ leftmost [clickEvent, pb]
 
   let mresp = fmap decodeXhrResponse asyncReq
   xs <- holdDyn (Just []) mresp >>= mapDyn fromJust
 
-  xs' <- forDyn (xs :: Dynamic Spider [Employee]) $ \xs ->
-           Map.fromList $ zip (map (\x -> (x, x)) [1..]) xs
+  xs' <- forDyn xs $ Map.fromList . zip (map (\x -> (x, x)) [1..])
 
   grid "my-grid" "table" 30 2 (constDyn columns) xs'
 
