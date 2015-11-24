@@ -115,7 +115,7 @@ grid containerClass tableClass rowHeight extra dcols drows = do
 
               -- filter controls
               dfilter <- case colFilter c of
-                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn (mconcat [ "class" =: "grid-col-filter" ]))
+                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
                 Nothing -> return $ constDyn $ ""
 
               -- for each column we return:
@@ -132,29 +132,25 @@ grid containerClass tableClass rowHeight extra dcols drows = do
 
           return (tbody, dcontrols)
 
-      rowCount <- mapDyn size dxs
-
+      resizeE <- performEvent . mapElHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
+      initHeightE <- performEvent . mapElHeight tbody $ pb
+      tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
-      params <- combineDyn (,) scrollTop tbodyHeight
-      window <- combineDyn toWindow params dxs
-
-      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
-
-      resizeE <- performEvent . mapHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
-      initHeightE <- performEvent . mapHeight tbody $ pb
-      tbodyHeight <- holdDyn 0 $ leftmost [resizeE, initHeightE]
 
       -- joinDynThroughMap :: forall t k a. (Reflex t, Ord k) => Dynamic t (Map k (Dynamic t a)) -> Dynamic t (Map k a)
       -- split controls into filters and sort events
       dfs <- return . joinDynThroughMap =<< mapDyn (Map.map fst) dcontrols
       ess <- mapDyn (Map.map snd) dcontrols -- Dynamic t (Map k (Event t0 k))
-
-      drc <- combineDyn (,) drows dcols
-      filtered <- combineDyn applyFilters drc dfs
-
-      drc' <- combineDyn (,) filtered dcols
       sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) ess
-      dxs <- combineDyn applySort drc' sortState
+
+      dxs <- combineDyn (,) dcols drows
+          >>= combineDyn applyFilters dfs
+          >>= combineDyn applySort sortState
+
+      rowCount <- mapDyn size dxs
+
+      window <- combineDyn (,) scrollTop tbodyHeight >>= combineDyn toWindow dxs
+      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
   return ()
 
@@ -162,16 +158,18 @@ grid containerClass tableClass rowHeight extra dcols drows = do
     scrollDebounceDelay = 0.04
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
-    mapHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
+    mapElHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
-    toWindow (scrollTop, tbodyHeight) =
+    toWindow :: Ord k => Map (k, k) v -> (Int, Int) -> Map (k, k) v
+    toWindow xs (scrollTop, tbodyHeight) =
       let d = scrollTop `div` rowHeight - extra
           x = fromEnum $ odd d
           skip = d - x
-          wsize = (ceiling tbodyHeight) `div` rowHeight + 1 + x + 2*extra
-      in Map.fromList . take wsize . drop skip . Map.toList
+          wsize = tbodyHeight `div` rowHeight + 1 + x + 2*extra
+      in Map.fromList . take wsize . drop skip . Map.toList $ xs
 
+    toRowgroupAttrs :: Int -> Int -> Map String String
     toRowgroupAttrs scrollTop rowCount = 
       let total = rowCount * rowHeight
           (d, pad) = scrollTop `divMod` rowHeight
@@ -184,8 +182,8 @@ grid containerClass tableClass rowHeight extra dcols drows = do
                     <> "top"      =: (show woffset <> "px")
                     <> "height"   =: (show wheight <> "px")
 
-    applyFilters :: Ord k => (Map (k, k) v, Map k (Column k v)) -> Map k String -> Map (k, k) v
-    applyFilters (xs, cols) = Map.foldrWithKey (applyOne cols) xs
+    applyFilters :: Ord k => Map k String -> (Map k (Column k v), Map (k, k) v) -> (Map k (Column k v), Map (k, k) v)
+    applyFilters fs (cols, xs) = (cols, Map.foldrWithKey (applyOne cols) xs fs)
     applyOne _ _ "" xs = xs
     applyOne cols k s xs = case Map.lookup k cols of
                               Just c -> case colFilter c of
@@ -200,8 +198,8 @@ grid containerClass tableClass rowHeight extra dcols drows = do
     toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (k, SortOrder))
     toSortState = foldDyn (\k (pk, v) -> if k == pk then (k, nextSort v) else (k, SortAsc)) (def, def)
 
-    applySort :: (Num k, Ord k, Enum k) => (Map (k, k) v, Map k (Column k v)) -> (k, SortOrder) -> Map (k, k) v
-    applySort (xs, cols) (k, sortOrder) =
+    applySort :: (Num k, Ord k, Enum k) => (k, SortOrder) -> (Map k (Column k v), Map (k, k) v) -> Map (k, k) v
+    applySort (k, sortOrder) (cols, xs) =
       case (maybeSortFunc k cols) of
         Nothing -> xs
         Just f -> Map.fromList $ reorder $ f $ Map.toList xs
