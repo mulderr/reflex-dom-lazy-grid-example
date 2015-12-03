@@ -199,6 +199,10 @@ table tbody rowgroup {
   cursor: pointer;
 }
 
+.grid-menu-list li:hover {
+  background-color: #ddd;
+}
+
 .grid-menu-col-visible:before {
   content: "\2611\00a0";
 }

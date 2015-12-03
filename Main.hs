@@ -24,7 +24,7 @@ data Employee = Employee
   , company :: String
   , employed :: Bool
   }
-  deriving (Show)
+  deriving (Eq, Show)
 
 instance FromJSON Employee where
   parseJSON (Object v) = Employee <$> v .: "firstName"

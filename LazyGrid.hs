@@ -1,4 +1,33 @@
 {-# LANGUAGE RecursiveDo #-}
+
+-- Lazy grid - based on virtualList code, styled after ui-grid.
+--
+-- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
+--
+-- Terminology:
+-- - xs     - filtered sorted rows
+-- - window - the rows to be rendered from xs
+--
+-- Why not reuse virtualList:
+-- - hardocded divs break semantic markup
+-- - positions each row absolute based on key which causes problems when filtering
+-- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row speparately
+-- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
+--
+-- Whats with the tuple key?
+-- - listWithKey does a shallow diff on keys and will not re-render rows unless the keys change
+-- - with Map k v sorting does not change the set of keys in any way thus the dom would not be updated
+-- - to work around the above we use a composite key (k, k) first component is used for ordering (see Ord for (a, a)), second
+--   is the row id (or original position), this way the map is always ordered according to current sort but listWithKey will
+--   notice changes
+-- - yes, it is awkard, i wonder if using listWithKeyShallowDiff would make this go away
+--
+-- TODO:
+-- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
+-- - performance tuning
+-- - column selection
+-- - export to csv
+--
 module LazyGrid where
 
 import Control.Monad (forM_, when, liftM)
@@ -15,13 +44,21 @@ import Reflex.Dom
 import GHCJS.DOM.Element hiding (drop)
 
 
+type Columns k v = Map k (Column k v)
+type Rows k v = Map (k, k) v
+type Filters k = Map k String
+
+
 data Column k v = Column
   { colHeader :: String
-  , colValue :: (k, k) -> v -> String                           -- ^ column string value for display, can use row key and value
-  , colCompare :: Maybe (v -> v -> Ordering)                    -- ^ would it be nicer to just use ord or do we need more flexibility?
-  , colFilter :: Maybe (String -> Map (k, k) v -> Map (k, k) v) -- ^ filtering function
+  , colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
+  , colCompare :: Maybe (v -> v -> Ordering)              -- ^ would it be nicer to just use ord or do we need more flexibility?
+  , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
   , colVisible :: Bool
   }
+
+instance Eq (Column k v) where
+  x == y = colHeader x == colHeader y
 
 instance Default (Column k v) where
   def = Column
@@ -46,41 +83,55 @@ nextSort SortDesc = SortNone
 nextSort s = succ s
 
 
+data GridOrdering k = GridOrdering k SortOrder
 
--- Lazy grid - based on virtualList code, styled after ui-grid.
--- 
--- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
---
--- Terminology:
--- - window - the rows to be rendered given tbody height, scroll position and (filtered, sorted) data
---
--- Why not reuse virtualList:
--- - hardocded divs break semantic markup
--- - positions each row absolute based on key which causes problems when filtering
--- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row
--- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
---
--- Whats with the tuple key?
--- - listWithKey does a shallow diff on keys and will not re-render rows unless the keys change
--- - with Map k v sorting does not change the set of keys in any way thus the dom would not be updated
--- - to work around the above we use a composite key (k, k) first component is used for ordering (see Ord for (a, a)), second
---   is the row id (or original position), this way the map is always ordered according to current sort but listWithKey will
---   notice changes
--- - yes, it is awkard, i wonder if using listWithKeyShallowDiff would make this go away
---
--- TODO:
--- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
--- - performance tuning
--- - column selection
--- - export to csv
-grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k, Show v)
+instance Default k => Default (GridOrdering k) where
+  def = GridOrdering def def
+
+
+gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
+  => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
+  -> m (Dynamic t (Rows k v))
+gridManager e =
+  holdDyn Map.empty $ fmap toXs e
+  where
+    toXs (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
+
+
+gridFilter :: Ord k => Columns k v -> Filters k -> Rows k v -> Rows k v
+gridFilter cols fs xs =
+  Map.foldrWithKey (applyOne cols) xs fs
+  where
+    applyOne _ _ "" xs = xs
+    applyOne cols k s xs = case Map.lookup k cols of
+                             Nothing -> xs
+                             Just c -> case colFilter c of
+                                         Just f -> f s xs
+                                         Nothing -> xs
+
+gridSort :: (Num k, Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
+gridSort cols (GridOrdering k sortOrder) xs =
+  case (maybeSortFunc k cols) of
+    Nothing -> xs
+    Just f -> Map.fromList $ reorder $ f $ Map.toList xs
+  where
+    maybeSortFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
+      let f' = (\(_, v1) (_, v2) -> f v1 v2)
+      in case sortOrder of
+        SortNone -> Nothing
+        SortAsc -> return $ sortBy f'
+        SortDesc -> return $ sortBy (flip f')
+    reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
+
+
+grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
   -> Int                                    -- ^ extra rows rendered on top and bottom
-  -> Dynamic t (Map k (Column k v))         -- ^ column spec
-  -> Dynamic t (Map (k, k) v)               -- ^ rows
-  -> (Map k (Column k v) -> (k, k) -> Dynamic t v -> m a) -- ^ row creating action
+  -> Dynamic t (Columns k v)                -- ^ columns
+  -> Dynamic t (Rows k v)                   -- ^ rows
+  -> (Columns k v -> (k, k) -> Dynamic t v -> m a) -- ^ row creating action
   -> m ()
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
@@ -147,9 +198,21 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       ess <- mapDyn (Map.map snd) dcontrols -- Dynamic t (Map k (Event t0 k))
       sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) ess
 
-      dxs <- combineDyn (,) dcols drows
-          >>= combineDyn applyFilters dfs
-          >>= combineDyn applySort sortState
+      -- TODO:
+      -- if the new filter value contains the old one (ex. user types another letter) we want to search within
+      -- currenlty filtered items - as in keep existing work and not start from scratch
+      -- could that be done with a fold of some kind?
+      --
+      -- also if we use filters on multiple columns we don't want to have to reapply all of them from
+      -- scratch whenever something is added to any one of them
+      --
+      -- note we cannot avoid starting from scratch when we subtract something from any of the filters
+      gridState <- combineDyn (,) dcols drows
+        >>= combineDyn (\fs (a, b) -> (a, b, fs)) dfs
+        >>= combineDyn (\so (a, b, c) -> (a, b, c, so)) sortState
+      dxs <- gridManager $ updated gridState
+
+      performEvent $ fmap (const $ liftIO $ putStrLn "xs changed") $ updated dxs
 
       rowCount <- mapDyn size dxs
 
@@ -159,13 +222,13 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   return ()
 
   where
-    scrollDebounceDelay = 0.04
+    scrollDebounceDelay = 0.04 -- 25Hz
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapElHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
-    toWindow :: Ord k => Map (k, k) v -> (Int, Int) -> Map (k, k) v
+    toWindow :: Ord k => Rows k v -> (Int, Int) -> Rows k v
     toWindow xs (scrollTop, tbodyHeight) =
       let d = scrollTop `div` rowHeight - extra
           x = fromEnum $ odd d
@@ -186,38 +249,13 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                     <> "top"      =: (show woffset <> "px")
                     <> "height"   =: (show wheight <> "px")
 
-    applyFilters :: Ord k => Map k String -> (Map k (Column k v), Map (k, k) v) -> (Map k (Column k v), Map (k, k) v)
-    applyFilters fs (cols, xs) = (cols, Map.foldrWithKey (applyOne cols) xs fs)
-    applyOne _ _ "" xs = xs
-    applyOne cols k s xs = case Map.lookup k cols of
-                              Just c -> case colFilter c of
-                                          Just f -> f s xs
-                                          Nothing -> xs
-                              Nothing -> xs
+    -- whenever we switch to another column SortOrder is reset to SortAsc
+    toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (GridOrdering k))
+    toSortState = foldDyn f def
+      where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
 
-    -- takes an Event t k and returns a Dynamic t (k, SortOrder) with the current sort state
-    -- - k is the column key
-    -- - only one column can be sorted at a time
-    -- - whenever we switch to another column SortOrder is reset to SortAsc
-    toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (k, SortOrder))
-    toSortState = foldDyn (\k (pk, v) -> if k == pk then (k, nextSort v) else (k, SortAsc)) (def, def)
-
-    applySort :: (Num k, Ord k, Enum k) => (k, SortOrder) -> (Map k (Column k v), Map (k, k) v) -> Map (k, k) v
-    applySort (k, sortOrder) (cols, xs) =
-      case (maybeSortFunc k cols) of
-        Nothing -> xs
-        Just f -> Map.fromList $ reorder $ f $ Map.toList xs
-      where
-        maybeSortFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
-          let f' = (\(_, v1) (_, v2) -> f v1 v2)
-          in case sortOrder of
-            SortNone -> Nothing
-            SortAsc -> return $ sortBy f'
-            SortDesc -> return $ sortBy (flip f')
-        reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
-
-    toSortIndicatorAttrs :: Eq k => k -> (k, SortOrder) -> Map String String
-    toSortIndicatorAttrs k (ck, v) = "class" =: ("grid-col-sort-icon" <> if ck == k
+    toSortIndicatorAttrs :: Eq k => k -> GridOrdering k -> Map String String
+    toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
       then case v of
              SortNone -> ""
              SortAsc -> " grid-col-sort-icon-asc"
