@@ -1,6 +1,8 @@
 dist/*
 *.hi
 *.js_hi
+*.js_dyn_hi
+*.js_dyn_o
 *.o
 *.js_o
 .stack-work/
