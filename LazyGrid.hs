@@ -1,4 +1,6 @@
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE TemplateHaskell, QuasiQuotes #-}
 
 -- Lazy grid - based on virtualList code, styled after ui-grid.
 --
@@ -42,6 +44,25 @@ import Reflex
 import Reflex.Dom
 
 import GHCJS.DOM.Element hiding (drop)
+
+-- | combineDyn for three 'Dynamic's.
+combineDyn3 :: (Reflex t, MonadHold t m)
+  => (a -> b -> c -> d)
+  -> Dynamic t a
+  -> Dynamic t b
+  -> Dynamic t c
+  -> m (Dynamic t d)
+combineDyn3 f a b c = [mkDyn|f $a $b $c|]
+
+-- | combineDyn for four 'Dynamic's.
+combineDyn4 :: (Reflex t, MonadHold t m)
+  => (a -> b -> c -> d -> e)
+  -> Dynamic t a
+  -> Dynamic t b
+  -> Dynamic t c
+  -> Dynamic t d
+  -> m (Dynamic t e)
+combineDyn4 f a b c d = [mkDyn|f $a $b $c $d|]
 
 
 type Columns k v = Map k (Column k v)
@@ -93,9 +114,9 @@ gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
   -> m (Dynamic t (Rows k v))
 gridManager e =
-  holdDyn Map.empty $ fmap toXs e
+  holdDyn Map.empty $ fmap f e
   where
-    toXs (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
+    f (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
 
 
 gridFilter :: Ord k => Columns k v -> Filters k -> Rows k v -> Rows k v
@@ -207,16 +228,13 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       -- scratch whenever something is added to any one of them
       --
       -- note we cannot avoid starting from scratch when we subtract something from any of the filters
-      gridState <- combineDyn (,) dcols drows
-        >>= combineDyn (\fs (a, b) -> (a, b, fs)) dfs
-        >>= combineDyn (\so (a, b, c) -> (a, b, c, so)) sortState
+      gridState <- combineDyn4 (,,,) dcols drows dfs sortState
       dxs <- gridManager $ updated gridState
+      rowCount <- mapDyn size dxs
 
       performEvent $ fmap (const $ liftIO $ putStrLn "xs changed") $ updated dxs
 
-      rowCount <- mapDyn size dxs
-
-      window <- combineDyn (,) scrollTop tbodyHeight >>= combineDyn toWindow dxs
+      window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
   return ()
@@ -228,8 +246,8 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
     mapElHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
-    toWindow :: Ord k => Rows k v -> (Int, Int) -> Rows k v
-    toWindow xs (scrollTop, tbodyHeight) =
+    toWindow :: Ord k => Rows k v -> Int -> Int -> Rows k v
+    toWindow xs scrollTop tbodyHeight =
       let d = scrollTop `div` rowHeight - extra
           x = fromEnum $ odd d
           skip = d - x
