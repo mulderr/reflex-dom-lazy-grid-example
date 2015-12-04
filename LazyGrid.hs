@@ -1,7 +1,4 @@
 {-# LANGUAGE RecursiveDo #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE TemplateHaskell, QuasiQuotes #-}
-
 -- Lazy grid - based on virtualList code, styled after ui-grid.
 --
 -- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
@@ -38,31 +35,13 @@ import Data.Default
 import Data.List (sortBy)
 import Data.Map as Map
 import Data.Monoid ((<>))
-import qualified Data.Vector as V
 
 import Reflex
 import Reflex.Dom
 
 import GHCJS.DOM.Element hiding (drop)
 
--- | combineDyn for three 'Dynamic's.
-combineDyn3 :: (Reflex t, MonadHold t m)
-  => (a -> b -> c -> d)
-  -> Dynamic t a
-  -> Dynamic t b
-  -> Dynamic t c
-  -> m (Dynamic t d)
-combineDyn3 f a b c = [mkDyn|f $a $b $c|]
-
--- | combineDyn for four 'Dynamic's.
-combineDyn4 :: (Reflex t, MonadHold t m)
-  => (a -> b -> c -> d -> e)
-  -> Dynamic t a
-  -> Dynamic t b
-  -> Dynamic t c
-  -> Dynamic t d
-  -> m (Dynamic t e)
-combineDyn4 f a b c d = [mkDyn|f $a $b $c $d|]
+import Utils
 
 
 type Columns k v = Map k (Column k v)
@@ -231,8 +210,6 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       gridState <- combineDyn4 (,,,) dcols drows dfs sortState
       dxs <- gridManager $ updated gridState
       rowCount <- mapDyn size dxs
-
-      performEvent $ fmap (const $ liftIO $ putStrLn "xs changed") $ updated dxs
 
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
