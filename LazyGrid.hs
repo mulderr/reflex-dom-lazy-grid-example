@@ -39,11 +39,14 @@ import Data.Monoid ((<>))
 import Reflex
 import Reflex.Dom
 
-import GHCJS.DOM (currentWindow)
-import GHCJS.DOM.Blob
-import GHCJS.DOM.Document
 import GHCJS.DOM.Element hiding (drop)
-import GHCJS.DOM.DOMWindow
+import GHCJS.DOM.EventM (on)
+
+import GHCJS.DOM (currentWindow)
+--import GHCJS.DOM.Blob
+--import GHCJS.DOM.Document hiding (drop)
+--import GHCJS.DOM.Window hiding (drop)
+
 
 import Utils
 
@@ -236,7 +239,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
     scrollDebounceDelay = 0.04 -- 25Hz
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
-    mapElHeight el = fmap (const $ liftIO $ elementGetOffsetHeight $ _el_element el)
+    mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
     toWindow :: Ord k => Rows k v -> Int -> Int -> Rows k v
@@ -304,31 +307,31 @@ resizeDetectorAttr attrs w = do
   let reset = do
         let e = _el_element expand
             s = _el_element shrink
-        eow <- elementGetOffsetWidth e
-        eoh <- elementGetOffsetHeight e
+        eow <- getOffsetWidth e
+        eoh <- getOffsetHeight e
         let ecw = eow + 10
             ech = eoh + 10
-        elementSetAttribute (_el_element expandChild) "style" (childStyle <> "width: " <> show ecw <> "px;" <> "height: " <> show ech <> "px;")
-        esw <- elementGetScrollWidth e
-        elementSetScrollLeft e esw
-        esh <- elementGetScrollHeight e
-        elementSetScrollTop e esh
-        ssw <- elementGetScrollWidth s
-        elementSetScrollLeft s ssw
-        ssh <- elementGetScrollHeight s
-        elementSetScrollTop s ssh
-        lastWidth <- elementGetOffsetWidth (_el_element parent)
-        lastHeight <- elementGetOffsetHeight (_el_element parent)
+        setAttribute (_el_element expandChild) "style" (childStyle <> "width: " <> show ecw <> "px;" <> "height: " <> show ech <> "px;")
+        esw <- getScrollWidth e
+        setScrollLeft e esw
+        esh <- getScrollHeight e
+        setScrollTop e esh
+        ssw <- getScrollWidth s
+        setScrollLeft s ssw
+        ssh <- getScrollHeight s
+        setScrollTop s ssh
+        lastWidth <- getOffsetWidth (_el_element parent)
+        lastHeight <- getOffsetHeight (_el_element parent)
         return (Just lastWidth, Just lastHeight)
       resetIfChanged ds = do
-        pow <- elementGetOffsetWidth (_el_element parent)
-        poh <- elementGetOffsetHeight (_el_element parent)
+        pow <- getOffsetWidth (_el_element parent)
+        poh <- getOffsetHeight (_el_element parent)
         if ds == (Just pow, Just poh)
            then return Nothing
            else liftM Just reset
   pb <- getPostBuild
-  expandScroll <- wrapDomEvent (_el_element expand) elementOnscroll $ return ()
-  shrinkScroll <- wrapDomEvent (_el_element shrink) elementOnscroll $ return ()
+  expandScroll <- wrapDomEvent (_el_element expand) (`on` scroll) $ return ()
+  shrinkScroll <- wrapDomEvent (_el_element shrink) (`on` scroll) $ return ()
   size0 <- performEvent $ fmap (const $ liftIO reset) pb
   rec resize <- performEventAsync $ fmap (\d cb -> liftIO $ cb =<< resetIfChanged d) $ tag (current dimensions) $ leftmost [expandScroll, shrinkScroll]
       dimensions <- holdDyn (Nothing, Nothing) $ leftmost [ size0, fmapMaybe id resize ]
