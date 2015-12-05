@@ -39,7 +39,11 @@ import Data.Monoid ((<>))
 import Reflex
 import Reflex.Dom
 
+import GHCJS.DOM (currentWindow)
+import GHCJS.DOM.Blob
+import GHCJS.DOM.Document
 import GHCJS.DOM.Element hiding (drop)
+import GHCJS.DOM.DOMWindow
 
 import Utils
 
@@ -89,6 +93,7 @@ instance Default k => Default (GridOrdering k) where
   def = GridOrdering def def
 
 
+-- | Handles model changes in response to filtering or sorting.
 gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
   -> m (Dynamic t (Rows k v))
@@ -97,7 +102,7 @@ gridManager e =
   where
     f (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
 
-
+-- | Apply filters to a set of rows.
 gridFilter :: Ord k => Columns k v -> Filters k -> Rows k v -> Rows k v
 gridFilter cols fs xs =
   Map.foldrWithKey (applyOne cols) xs fs
@@ -109,6 +114,7 @@ gridFilter cols fs xs =
                                          Just f -> f s xs
                                          Nothing -> xs
 
+-- | Apply column  sorting to a set of rows.
 gridSort :: (Num k, Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
 gridSort cols (GridOrdering k sortOrder) xs =
   case (maybeSortFunc k cols) of
@@ -135,7 +141,7 @@ grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> m ()
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (tbody, dcontrols)) <- resizeDetectorAttr ("class" =: containerClass) $ do
+  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles)) <- resizeDetectorAttr ("class" =: containerClass) $ do
         -- grid menu stub
         -- ghcjs cannot figure out t = Spider for Reflex t
         (expE, expVisE, colToggles) <- el "div" $ do
@@ -146,15 +152,15 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
           elDynAttr "div" menuAttrs $ do
             elClass "ul" "grid-menu-list" $ do
               el "li" $ text "Hi! I don't work yet ;/"
-              exportEl <- el' "li" $ text "Export all data as csv"
-              exportVisibleEl <- el' "li" $ text "Export filtered data as csv"
+              (exportEl, _) <- el' "li" $ text "Export all data as csv"
+              (exportVisibleEl, _) <- el' "li" $ text "Export filtered data as csv"
               toggles <- listWithKey dcols $ \k dc ->
                 sample (current dc) >>= \c -> el "div" $ do
                   (toggleEl, _) <- elAttr' "li" ("class" =: "grid-menu-col grid-menu-col-visible") $ text $ colHeader c
                   return toggleEl -- $ domEvent Click toggleEl
               return (exportEl, exportVisibleEl, toggles)
 
-        elClass "table" tableClass $ do
+        (tbody, dcontrols) <- elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ do
 
@@ -171,7 +177,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
               -- filter controls
               dfilter <- case colFilter c of
-                Just f -> return . _textInput_value =<< textInput (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
+                Just f -> return . _textInput_value =<< textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
                 Nothing -> return $ constDyn $ ""
 
               -- for each column we return:
@@ -186,6 +192,8 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                   mkRow cs k dv
 
           return (tbody, dcontrols)
+
+        return (tbody, dcontrols, expE, expVisE, colToggles)
 
       resizeE <- performEvent . mapElHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
       initHeightE <- performEvent . mapElHeight tbody $ pb
@@ -213,6 +221,14 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
+
+      {-
+      performEvent_ $ fmap (\_ -> do
+        rawFile <- createObjectURL (Just blob)
+        (el, _) <- elAttr' "a" ("style" =: "display: none;", "download" =: "export.csv", "href" =: rawFile)
+
+        ) $ domEvent Click expE
+      -}
 
   return ()
 
@@ -256,6 +272,17 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
              SortAsc -> " grid-col-sort-icon-asc"
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
+
+
+-- | Text input with a button to clear the value.
+-- The button content ie. icon or text is to be defined through CSS using btnClass.
+textInputClearable :: MonadWidget t m => String -> TextInputConfig t -> m (TextInput t)
+textInputClearable btnClass tic =
+  elAttr "div" ("style" =: "position: relative;") $ do
+    (e, _) <- elAttr' "span" ("class" =: btnClass) $ return ()
+    let clearE = fmap (\_ -> "") $ domEvent Click e
+    ti <- textInput $ tic & setValue .~ clearE
+    return ti
 
 
 -- more general version of resizeDetectorWithStyle

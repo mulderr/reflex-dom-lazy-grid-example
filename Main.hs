@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE RecursiveDo #-}
 module Main where
 
 import Data.Aeson
@@ -44,7 +43,7 @@ gridExample = do
   pb <- getPostBuild
 
   -- fetch event occurs on page load and every time we click the refresh button
-  let req = xhrRequest "GET" "500.json" def
+  let req = xhrRequest "GET" "10000.json" def
   asyncReq <- performRequestAsync $ tag (constant req) $ leftmost [clickEvent, pb]
 
   let mresp = fmap decodeXhrResponse asyncReq

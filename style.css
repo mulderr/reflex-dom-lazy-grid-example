@@ -119,6 +119,23 @@ table tbody rowgroup {
 }
 
 /*
+ * filters
+ */
+.grid-col-filter-clear-btn {
+  position: absolute;
+  right: 0;
+  padding-left: 0.5rem;
+  padding-right: 0.3rem;
+  line-height: 2em;
+  cursor: pointer;
+  color: #888;
+}
+
+.grid-col-filter-clear-btn:before {
+  content: "x";
+}
+
+/*
  * sorting
  */
 .grid-col-sort-icon {
@@ -179,6 +196,7 @@ table tbody rowgroup {
   display: none;
   border: 1px solid rgb(212, 212, 212);
   background-color: #eee;
+  z-index: 10;
 }
 
 .grid-menu-open {
