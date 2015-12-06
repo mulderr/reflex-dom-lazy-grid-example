@@ -1,4 +1,5 @@
-{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE RecursiveDo, ScopedTypeVariables #-}
+
 -- Lazy grid - based on virtualList code, styled after ui-grid.
 --
 -- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
@@ -31,21 +32,32 @@ module LazyGrid where
 
 import Control.Monad (forM_, when, liftM)
 import Control.Monad.IO.Class (liftIO)
+import qualified Data.Aeson as AE
 import Data.Default
 import Data.List (sortBy)
-import Data.Map as Map
+import Data.Map (Map)
+import qualified Data.Map as Map
+import qualified Data.HashMap.Strict as HM
 import Data.Monoid ((<>))
+import qualified Data.Text as T
+import Text.CSV
 
 import Reflex
 import Reflex.Dom
 
+import GHCJS.Foreign
+import GHCJS.Marshal
+
 import GHCJS.DOM.Element hiding (drop)
+import qualified GHCJS.DOM.HTMLElement as HE
 import GHCJS.DOM.EventM (on)
 
-import GHCJS.DOM (currentWindow)
---import GHCJS.DOM.Blob
---import GHCJS.DOM.Document hiding (drop)
+--import GHCJS.DOM (currentWindow)
+import GHCJS.DOM.Blob
+import qualified GHCJS.DOM.Document as D
 --import GHCJS.DOM.Window hiding (drop)
+import GHCJS.DOM.URL
+import GHCJS.DOM.Types (BlobPropertyBag (..), HTMLDocument, castToHTMLAnchorElement)
 
 
 import Utils
@@ -220,18 +232,14 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       -- note we cannot avoid starting from scratch when we subtract something from any of the filters
       gridState <- combineDyn4 (,,,) dcols drows dfs sortState
       dxs <- gridManager $ updated gridState
-      rowCount <- mapDyn size dxs
+      rowCount <- mapDyn Map.size dxs
 
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
-      {-
-      performEvent_ $ fmap (\_ -> do
-        rawFile <- createObjectURL (Just blob)
-        (el, _) <- elAttr' "a" ("style" =: "display: none;", "download" =: "export.csv", "href" =: rawFile)
-
-        ) $ domEvent Click expE
-      -}
+      doc <- askDocument
+      performEvent_ $ fmap (liftIO . triggerDownload doc "text/csv" "export.csv" . uncurry csv)
+        $ attachDyn dcols $ tag (current drows) $ domEvent Click expE
 
   return ()
 
@@ -276,6 +284,10 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
 
+    csv :: Columns k v -> Rows k v -> String
+    csv cols rows = printCSV $ toFields <$> Map.toList rows
+      where toFields (k, x) = fmap (\c -> colValue c k x) cs
+            cs = Map.elems cols
 
 -- | Text input with a button to clear the value.
 -- The button content ie. icon or text is to be defined through CSS using btnClass.
@@ -287,6 +299,31 @@ textInputClearable btnClass tic =
     ti <- textInput $ tic & setValue .~ clearE
     return ti
 
+-- an HTML5 way of locally triggering a file download with arbitrary content
+-- only tested on recent versions of Chrome and Firefox
+triggerDownload
+  :: HTMLDocument
+  -> String -- ^ mime type
+  -> String -- ^ file name
+  -> String -- ^ content
+  -> IO ()
+triggerDownload doc mime filename s = do
+  windowUrl <- js_windowURL
+  v <- toJSVal s
+  p <- toJSVal $ AE.Object $ HM.singleton (T.pack "type") (AE.String $ T.pack mime)
+  blob <- newBlob' [v] $ Just $ BlobPropertyBag p
+  Just (url :: String) <- createObjectURL windowUrl (Just blob)
+  Just a <- D.createElement doc (Just "a")
+  setAttribute a "style" "display: none;"
+  setAttribute a "download" filename
+  setAttribute a "href" url
+  HE.click $ castToHTMLAnchorElement a
+  revokeObjectURL windowUrl url
+
+-- for triggerDownload
+-- cannot use newURL; createObjectURL is only defined for window.URL?
+foreign import javascript unsafe "window[\"URL\"]"
+        js_windowURL :: IO URL
 
 -- more general version of resizeDetectorWithStyle
 -- need to specify class

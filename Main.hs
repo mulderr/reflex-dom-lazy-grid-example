@@ -31,7 +31,6 @@ instance FromJSON Employee where
                                   <*> v .: "company"
                                   <*> v .: "employed"
 
-
 main :: IO ()
 main = mainWidgetWithCss $(embedFile "style.css") gridExample
 

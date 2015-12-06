@@ -176,6 +176,7 @@ table tbody rowgroup {
   border: 1px solid rgb(212, 212, 212);
   background-color: #eee;
   font-weight: bold;
+  z-index: 10;
 
   -webkit-touch-callout: none;
   -webkit-user-select: none;
@@ -196,7 +197,6 @@ table tbody rowgroup {
   display: none;
   border: 1px solid rgb(212, 212, 212);
   background-color: #eee;
-  z-index: 10;
 }
 
 .grid-menu-open {
