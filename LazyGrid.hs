@@ -52,10 +52,8 @@ import GHCJS.DOM.Element hiding (drop)
 import qualified GHCJS.DOM.HTMLElement as HE
 import GHCJS.DOM.EventM (on)
 
---import GHCJS.DOM (currentWindow)
 import GHCJS.DOM.Blob
 import qualified GHCJS.DOM.Document as D
---import GHCJS.DOM.Window hiding (drop)
 import GHCJS.DOM.URL
 import GHCJS.DOM.Types (BlobPropertyBag (..), HTMLDocument, castToHTMLAnchorElement)
 
@@ -145,6 +143,7 @@ gridSort cols (GridOrdering k sortOrder) xs =
     reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
 
 
+-- | Grid view.
 grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
@@ -166,9 +165,8 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
           elDynAttr "div" menuAttrs $ do
             elClass "ul" "grid-menu-list" $ do
-              el "li" $ text "Hi! I don't work yet ;/"
               (exportEl, _) <- el' "li" $ text "Export all data as csv"
-              (exportVisibleEl, _) <- el' "li" $ text "Export filtered data as csv"
+              (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
               toggles <- listWithKey dcols $ \k dc ->
                 sample (current dc) >>= \c -> el "div" $ do
                   (toggleEl, _) <- elAttr' "li" ("class" =: "grid-menu-col grid-menu-col-visible") $ text $ colHeader c
@@ -237,9 +235,8 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
-      doc <- askDocument
-      performEvent_ $ fmap (liftIO . triggerDownload doc "text/csv" "export.csv" . uncurry csv)
-        $ attachDyn dcols $ tag (current drows) $ domEvent Click expE
+      exportCsv dcols $ tag (current drows) $ domEvent Click expE
+      exportCsv dcols $ tag (current dxs) $ domEvent Click expVisE
 
   return ()
 
@@ -284,20 +281,15 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
 
-    csv :: Columns k v -> Rows k v -> String
-    csv cols rows = printCSV $ toFields <$> Map.toList rows
-      where toFields (k, x) = fmap (\c -> colValue c k x) cs
-            cs = Map.elems cols
+toCsv :: Columns k v -> Rows k v -> String
+toCsv cols rows = printCSV $ toFields <$> Map.toList rows
+  where toFields (k, x) = fmap (\c -> colValue c k x) cs
+        cs = Map.elems cols
 
--- | Text input with a button to clear the value.
--- The button content ie. icon or text is to be defined through CSS using btnClass.
-textInputClearable :: MonadWidget t m => String -> TextInputConfig t -> m (TextInput t)
-textInputClearable btnClass tic =
-  elAttr "div" ("style" =: "position: relative;") $ do
-    (e, _) <- elAttr' "span" ("class" =: btnClass) $ return ()
-    let clearE = fmap (\_ -> "") $ domEvent Click e
-    ti <- textInput $ tic & setValue .~ clearE
-    return ti
+exportCsv :: MonadWidget t m => Dynamic t (Columns k v) -> Event t (Rows k v) -> m ()
+exportCsv dcols e = do
+  doc <- askDocument
+  performEvent_ $ fmap (liftIO . triggerDownload doc "text/csv" "export.csv" . uncurry toCsv) $ attachDyn dcols e
 
 -- an HTML5 way of locally triggering a file download with arbitrary content
 -- only tested on recent versions of Chrome and Firefox
@@ -324,6 +316,16 @@ triggerDownload doc mime filename s = do
 -- cannot use newURL; createObjectURL is only defined for window.URL?
 foreign import javascript unsafe "window[\"URL\"]"
         js_windowURL :: IO URL
+
+-- | Text input with a button to clear the value.
+-- The button content ie. icon or text is to be defined through CSS using btnClass.
+textInputClearable :: MonadWidget t m => String -> TextInputConfig t -> m (TextInput t)
+textInputClearable btnClass tic =
+  elAttr "div" ("style" =: "position: relative;") $ do
+    (e, _) <- elAttr' "span" ("class" =: btnClass) $ return ()
+    let clearE = fmap (\_ -> "") $ domEvent Click e
+    ti <- textInput $ tic & setValue .~ clearE
+    return ti
 
 -- more general version of resizeDetectorWithStyle
 -- need to specify class
