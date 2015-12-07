@@ -30,6 +30,7 @@
 --
 module LazyGrid where
 
+import Control.Lens ((^.))
 import Control.Monad (forM_, when, liftM)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as AE
@@ -127,7 +128,7 @@ gridFilter cols fs xs =
                                          Just f -> f s xs
                                          Nothing -> xs
 
--- | Apply column  sorting to a set of rows.
+-- | Apply column sorting to a set of rows.
 gridSort :: (Num k, Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
 gridSort cols (GridOrdering k sortOrder) xs =
   case (maybeSortFunc k cols) of
@@ -144,7 +145,7 @@ gridSort cols (GridOrdering k sortOrder) xs =
 
 
 -- | Grid view.
-grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k)
+grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   => String                                 -- ^ css class applied to <div> container
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
@@ -156,8 +157,8 @@ grid :: (MonadWidget t m, Ord k, Default k, Enum k, Num k)
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles)) <- resizeDetectorAttr ("class" =: containerClass) $ do
-        -- grid menu stub
-        -- ghcjs cannot figure out t = Spider for Reflex t
+
+        -- grid menu
         (expE, expVisE, colToggles) <- el "div" $ do
           (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
           menuOpen <- toggle False $ domEvent Click menuToggle
@@ -167,11 +168,15 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
             elClass "ul" "grid-menu-list" $ do
               (exportEl, _) <- el' "li" $ text "Export all data as csv"
               (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
-              toggles <- listWithKey dcols $ \k dc ->
+              toggles <- listViewWithKey dcols $ \k dc ->
                 sample (current dc) >>= \c -> el "div" $ do
                   (toggleEl, _) <- elAttr' "li" ("class" =: "grid-menu-col grid-menu-col-visible") $ text $ colHeader c
-                  return toggleEl -- $ domEvent Click toggleEl
-              return (exportEl, exportVisibleEl, toggles)
+                  return $ fmap (const k) $ (domEvent Click toggleEl :: Event t ())
+              return
+                ( domEvent Click exportEl :: Event t ()
+                , domEvent Click exportVisibleEl :: Event t ()
+                , toggles
+                )
 
         (tbody, dcontrols) <- elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
@@ -189,8 +194,9 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                                 Nothing -> never
 
               -- filter controls
+              ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
               dfilter <- case colFilter c of
-                Just f -> return . _textInput_value =<< textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
+                Just f -> return $ _textInput_value ti
                 Nothing -> return $ constDyn $ ""
 
               -- for each column we return:
@@ -235,8 +241,12 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
-      exportCsv dcols $ tag (current drows) $ domEvent Click expE
-      exportCsv dcols $ tag (current dxs) $ domEvent Click expVisE
+      exportCsv dcols $ tag (current drows) expE
+      exportCsv dcols $ tag (current dxs) expVisE
+
+      --dt <- holdDyn def $ colToggles
+      --dcs <- combineDyn3 toCols dcols dcs dt
+      return ()
 
   return ()
 
@@ -246,8 +256,11 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
     mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
 
+    toCols :: Columns k v -> Columns k v -> Map k k -> Columns k v
+    toCols cols cur ts = cols
+
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
-    toWindow :: Ord k => Rows k v -> Int -> Int -> Rows k v
+    toWindow :: Rows k v -> Int -> Int -> Rows k v
     toWindow xs scrollTop tbodyHeight =
       let d = scrollTop `div` rowHeight - extra
           x = fromEnum $ odd d
@@ -269,11 +282,11 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                     <> "height"   =: (show wheight <> "px")
 
     -- whenever we switch to another column SortOrder is reset to SortAsc
-    toSortState :: (MonadWidget t m, Eq k, Default k) => Event t k -> m (Dynamic t (GridOrdering k))
+    toSortState :: Event t k -> m (Dynamic t (GridOrdering k))
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
 
-    toSortIndicatorAttrs :: Eq k => k -> GridOrdering k -> Map String String
+    toSortIndicatorAttrs :: k -> GridOrdering k -> Map String String
     toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
       then case v of
              SortNone -> ""
@@ -322,10 +335,16 @@ foreign import javascript unsafe "window[\"URL\"]"
 textInputClearable :: MonadWidget t m => String -> TextInputConfig t -> m (TextInput t)
 textInputClearable btnClass tic =
   elAttr "div" ("style" =: "position: relative;") $ do
-    (e, _) <- elAttr' "span" ("class" =: btnClass) $ return ()
-    let clearE = fmap (\_ -> "") $ domEvent Click e
-    ti <- textInput $ tic & setValue .~ clearE
+    rec (e, _) <- elDynAttr' "span" attrs $ return ()
+        let clearE = domEvent Click e
+        ti <- textInput $ tic & setValue .~ fmap (\_ -> "") clearE
+        attrs <- holdDyn emptyAttrs $ leftmost [ fmap (\_ -> emptyAttrs) clearE, fmap f $ ti ^. textInput_input]
     return ti
+  where
+    emptyAttrs = ("style" =: "visibility: hidden;")
+    f s = case s of
+            "" -> emptyAttrs
+            _  -> ("class" =: btnClass)
 
 -- more general version of resizeDetectorWithStyle
 -- need to specify class
