@@ -26,12 +26,11 @@
 -- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
 -- - performance tuning
 -- - column selection
--- - export to csv
 --
 module LazyGrid where
 
 import Control.Lens ((^.))
-import Control.Monad (forM_, when, liftM)
+import Control.Monad (liftM)
 import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as AE
 import Data.Default
@@ -41,6 +40,7 @@ import qualified Data.Map as Map
 import qualified Data.HashMap.Strict as HM
 import Data.Monoid ((<>))
 import qualified Data.Text as T
+import Data.Traversable (forM)
 import Text.CSV
 
 import Reflex
@@ -153,7 +153,7 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> Dynamic t (Columns k v)                -- ^ columns
   -> Dynamic t (Rows k v)                   -- ^ rows
   -> (Columns k v -> (k, k) -> Dynamic t v -> m a) -- ^ row creating action
-  -> m ()
+  -> m (Dynamic t (Rows k v))
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles)) <- resizeDetectorAttr ("class" =: containerClass) $ do
@@ -168,10 +168,12 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
             elClass "ul" "grid-menu-list" $ do
               (exportEl, _) <- el' "li" $ text "Export all data as csv"
               (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
-              toggles <- listViewWithKey dcols $ \k dc ->
+              toggles <- listWithKey dcols $ \k dc ->
                 sample (current dc) >>= \c -> el "div" $ do
-                  (toggleEl, _) <- elAttr' "li" ("class" =: "grid-menu-col grid-menu-col-visible") $ text $ colHeader c
-                  return $ fmap (const k) $ (domEvent Click toggleEl :: Event t ())
+                  rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ colHeader c
+                      dt <- toggle (colVisible c) (domEvent Click toggleEl :: Event t ())
+                      attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
+                  return dt
               return
                 ( domEvent Click exportEl :: Event t ()
                 , domEvent Click exportVisibleEl :: Event t ()
@@ -179,7 +181,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                 )
 
         (tbody, dcontrols) <- elClass "table" tableClass $ do
-          dcontrols <- el "thead" $ el "tr" $ listWithKey dcols $ \k dc ->
+          dcontrols <- el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
             sample (current dc) >>= \c -> el "th" $ do
 
               -- header and sort controls
@@ -207,8 +209,12 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
           (tbody, _) <- el' "tbody" $
             elDynAttr "rowgroup" rowgroupAttrs $
               listWithKey window $ \k dv -> do
-                sample (current dcols) >>= \cs ->
+                -- faster? but will not update columns on currently visible rows
+                --sample (current dcs) >>= \cs ->
+                --  mkRow cs k dv
+                as <- forDyn dcs $ \cs ->
                   mkRow cs k dv
+                dyn as
 
           return (tbody, dcontrols)
 
@@ -241,23 +247,20 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
+      let colVisibility = joinDynThroughMap colToggles
+      dcs <- mapDyn (Map.filter (== True)) colVisibility
+        >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
+
       exportCsv dcols $ tag (current drows) expE
       exportCsv dcols $ tag (current dxs) expVisE
 
-      --dt <- holdDyn def $ colToggles
-      --dcs <- combineDyn3 toCols dcols dcs dt
-      return ()
-
-  return ()
+  return dxs
 
   where
     scrollDebounceDelay = 0.04 -- 25Hz
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
-
-    toCols :: Columns k v -> Columns k v -> Map k k -> Columns k v
-    toCols cols cur ts = cols
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
     toWindow :: Rows k v -> Int -> Int -> Rows k v

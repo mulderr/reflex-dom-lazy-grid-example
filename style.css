@@ -9,12 +9,19 @@ html {
   color: rgb(51, 51, 51);
 }
 
+.description {
+  width: 25%;
+  overflow: hidden;
+  padding-right: 1em;
+  box-sizing: border-box;
+}
+
 .my-grid {
   position: absolute;
-  top: 4rem;
+  top: 0;
   right: 0;
   bottom: 0;
-  left: 0;
+  left: 25%;
 }
 
 table thead th .grid-col-filter {
@@ -103,11 +110,11 @@ table th {
 /*
  * zebra
  */
-table tbody tr:nth-child(odd) td {
+table tbody tr:nth-child(odd) {
   background-color: rgb(243, 243, 243);
 }
 
-table tbody tr:nth-child(even) td {
+table tbody tr:nth-child(even) {
   background-color: rgb(253, 253, 253);
 }
 
@@ -223,4 +230,15 @@ table tbody rowgroup {
 
 .grid-menu-col-visible:before {
   content: "\2611\00a0";
+}
+
+.grid-menu-col-hidden:before {
+  content: "\2610\00a0";
+}
+
+/*
+ * conditional formatting
+ */
+table tbody tr td.red {
+  background-color: rgba(240, 83, 79, 0.8);
 }
