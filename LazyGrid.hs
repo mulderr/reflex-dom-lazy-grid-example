@@ -73,6 +73,7 @@ data Column k v = Column
   , colCompare :: Maybe (v -> v -> Ordering)              -- ^ would it be nicer to just use ord or do we need more flexibility?
   , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
   , colVisible :: Bool
+  , colAttrs :: Map String String
   }
 
 instance Eq (Column k v) where
@@ -85,6 +86,7 @@ instance Default (Column k v) where
     , colCompare = Nothing
     , colFilter = Nothing
     , colVisible = True
+    , colAttrs = Map.empty
     }
 
 data SortOrder
@@ -111,8 +113,8 @@ instance Default k => Default (GridOrdering k) where
 gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
   -> m (Dynamic t (Rows k v))
-gridManager e =
-  holdDyn Map.empty $ fmap f e
+gridManager =
+  holdDyn Map.empty . fmap f
   where
     f (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
 
@@ -182,7 +184,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
         (tbody, dcontrols) <- elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
-            sample (current dc) >>= \c -> el "th" $ do
+            sample (current dc) >>= \c -> elAttr "th" (colAttrs c) $ do
 
               -- header and sort controls
               let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (colCompare c)
@@ -207,14 +209,11 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
               return (dfilter, sortEvent)
 
           (tbody, _) <- el' "tbody" $
-            elDynAttr "rowgroup" rowgroupAttrs $
-              listWithKey window $ \k dv -> do
-                -- faster? but will not update columns on currently visible rows
-                --sample (current dcs) >>= \cs ->
-                --  mkRow cs k dv
-                as <- forDyn dcs $ \cs ->
+            elDynAttr "rowgroup" rowgroupAttrs $ do
+              as <- forDyn dcs $ \cs ->
+                listWithKey window $ \k dv ->
                   mkRow cs k dv
-                dyn as
+              dyn as
 
           return (tbody, dcontrols)
 

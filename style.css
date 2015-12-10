@@ -32,12 +32,6 @@ table thead th .grid-col-filter {
   padding: 2px;
 }
 
-/* fixed size row */
-table tr th:nth-child(1),
-table tr td:nth-child(1) {
-    width: 50px;
-}
-
 table {
     display: flex;
     flex-flow: column nowrap;

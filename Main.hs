@@ -7,6 +7,7 @@ import Data.Char (toLower)
 import Data.FileEmbed
 import Data.List (isInfixOf)
 import Data.Maybe (fromJust)
+import Data.Monoid ((<>))
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Traversable (forM)
@@ -41,13 +42,15 @@ gridExample = do
     el "p" $ do
       text "Features:"
       el "ul" $ forM
-        [ "semantic markup"
+        [ "semantic markup (although technically the row creating action is supplied by the user so there is no hard guarantee)"
         , "sorting"
         , "filtering"
         , "column selection"
-        , "csv export"
+        , "fixed width columns through custom column attrs"
+        , "conditional formatting using the row creating action"
+        , "csv export (using html5 createObjectURL, not supported on older browsers)"
         , "scales to occupy all available space"
-        , "styled after ui-grid"
+        , "styled after ui-grid (but almost nothing is hardcoded so you are free to just supply a different stylesheet)"
         ]
         $ \s -> el "li" $ text s
     e <- el "p" $ do
@@ -82,9 +85,9 @@ gridExample = do
       --   _ ->
       case colHeader c of
         "Employed" -> do let t = (colValue c) k v
-                             attrs = ("class" =: if t == "0" then "red" else "")
+                             attrs = (colAttrs c) <> ("class" =: if t == "0" then "red" else "")
                          elAttr "td" attrs $ text t
-        _ -> el "td" $ text ((colValue c) k v)
+        _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
 
   elClass "div" "description" $ do
     el "p" $ do
@@ -106,7 +109,6 @@ gridExample = do
     el "p" $ do
       text "Todo:"
       el "ul" $ do
-        el "li" $ text "fixed width columns (currently only with css but that breaks when coupled with column selection)"
         el "li" $ text "single row selection"
 
   return ()
@@ -115,7 +117,8 @@ gridExample = do
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
   [ def { colHeader = "No."
-        , colValue = (\(k, _) _ -> show k) 
+        , colValue = (\(k, _) _ -> show k)
+        , colAttrs = ("style" =: "width: 50px;")
         }
   , def { colHeader = "First name"
         , colValue = const firstName
@@ -136,6 +139,7 @@ columns = Map.fromList $ zip [1..]
         , colValue = (\_ -> show . fromEnum . employed)
         , colFilter = Just $ (\s -> Map.filter $ (==) s . show . fromEnum . employed)
         , colCompare = Just $ (\a b -> employed a `compare` employed b)
+        , colAttrs = ("style" =: "width: 80px;")
         }
   ]
 
