@@ -25,7 +25,6 @@
 -- TODO:
 -- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
 -- - performance tuning
--- - column selection
 --
 module LazyGrid where
 
@@ -198,14 +197,15 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                                 Nothing -> never
 
               -- filter controls
-              ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
               dfilter <- case colFilter c of
-                Just f -> return $ _textInput_value ti
+                Just f -> do
+                  ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
+                  return $ _textInput_value ti
                 Nothing -> return $ constDyn $ ""
 
               -- for each column we return:
               -- - filter string :: Dynamic t String
-              -- - sort button event tagged with column key :: Event t Int
+              -- - sort button event tagged with column key :: Event t k
               return (dfilter, sortEvent)
 
           (tbody, _) <- el' "tbody" $
@@ -224,10 +224,9 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
 
-      -- joinDynThroughMap :: forall t k a. (Reflex t, Ord k) => Dynamic t (Map k (Dynamic t a)) -> Dynamic t (Map k a)
       -- split controls into filters and sort events
       dfs <- return . joinDynThroughMap =<< mapDyn (Map.map fst) dcontrols
-      ess <- mapDyn (Map.map snd) dcontrols -- Dynamic t (Map k (Event t0 k))
+      ess <- mapDyn (Map.map snd) dcontrols
       sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) ess
 
       -- TODO:
