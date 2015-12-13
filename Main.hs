@@ -91,6 +91,9 @@ gridExample = do
         el "li" $ text "if you load a different dataset the view will not automatically reload (scroll away and back to recreate the rows)"
         el "li" $ text "arrow key scroll is broken, it locks when the currently visible rows go out of the DOM"
 
+    el "p" $ do
+      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "Code on Github"
+
   return ()
 
 
