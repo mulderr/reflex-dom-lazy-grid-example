@@ -1,20 +1,20 @@
 {-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
 module Main where
 
-import Data.Aeson
-import Data.Char (toLower)
-import Data.FileEmbed
-import Data.List (isInfixOf)
-import Data.Maybe (fromJust)
-import Data.Monoid ((<>))
-import Data.Map (Map)
+import           Data.Aeson
+import           Data.Char (toLower)
+import           Data.FileEmbed
+import           Data.List (isInfixOf)
+import           Data.Maybe (fromJust)
+import           Data.Monoid ((<>))
+import           Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Traversable (forM)
+import           Data.Traversable (forM)
 
-import Reflex
-import Reflex.Dom
+import           Reflex
+import           Reflex.Dom
 
-import LazyGrid
+import           LazyGrid
 
 
 data Employee = Employee

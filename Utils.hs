@@ -1,5 +1,8 @@
 {-# LANGUAGE TemplateHaskell, QuasiQuotes, GADTs #-}
-module Utils where
+module Utils
+  ( combineDyn3
+  , combineDyn4
+  ) where
 
 import Reflex
 
