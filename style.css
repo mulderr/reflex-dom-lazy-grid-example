@@ -10,9 +10,13 @@ html {
 }
 
 .description {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
   width: 25%;
-  overflow: hidden;
-  padding-right: 1em;
+  overflow-x: hidden;
+  padding: 1em;
   box-sizing: border-box;
 }
 
@@ -115,7 +119,7 @@ table tbody tr:nth-child(even) {
 /*
  * virtual scroll
  */
-table tbody rowgroup {
+table tbody x-rowgroup {
   display: block;
 }
 

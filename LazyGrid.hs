@@ -5,6 +5,7 @@
 -- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
 --
 -- Terminology:
+-- - cs     - visible columns
 -- - xs     - filtered sorted rows
 -- - window - the rows to be rendered from xs
 --
@@ -63,7 +64,7 @@ data Column k v = Column
   , colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
   , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
   , colVisible :: Bool                                    -- ^ initial visibility
-  , colAttrs :: Map String String
+  , colAttrs :: Map String String                         -- ^ element attrs applied to <th> and available for use in row action
   }
 
 instance Eq (Column k v) where
@@ -146,9 +147,9 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> Dynamic t (Rows k v)                   -- ^ rows
   -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
   -> m
-    ( Dynamic t (Rows k v)                  -- ^ filtred rows
-    , Dynamic t (Rows k v)                  -- ^ selected rows
-    )
+     ( Dynamic t (Rows k v)                 -- ^ filtred rows
+     , Dynamic t (Rows k v)                 -- ^ selected rows
+     )
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
@@ -203,9 +204,9 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
               return (dfilter, sortEvent)
 
           (tbody, dsel) <- el' "tbody" $
-            elDynAttr "rowgroup" rowgroupAttrs $ do
-              -- we want to sample the columns exactly once for all rows we render - for performance
+            elDynAttr "x-rowgroup" rowgroupAttrs $ do
               dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
+                  -- we want to sample the columns exactly once for all rows we render
                   cs <- sample $ current dcs
                   listWithKey window $ \k dv -> do
                     v <- sample $ current dv
@@ -218,31 +219,26 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
         return (tbody, dcontrols, expE, expVisE, colToggles, dsel)
 
+      -- height and top scroll
+      initHeightE <- performEvent $ mapElHeight tbody pb
       resizeE <- performEvent . mapElHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
-      initHeightE <- performEvent . mapElHeight tbody $ pb
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
 
       -- split controls into filters and sort events
       dfs <- return . joinDynThroughMap =<< mapDyn (Map.map fst) dcontrols
-      ess <- mapDyn (Map.map snd) dcontrols
-      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) ess
+      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) =<< mapDyn (Map.map snd) dcontrols
 
       -- TODO:
-      -- if the new filter value contains the old one (ex. user types another letter) we want to search within
-      -- currenlty filtered items - as in keep existing work and not start from scratch
-      -- could that be done with a fold of some kind?
-      --
-      -- also if we use filters on multiple columns we don't want to have to reapply all of them from
-      -- scratch whenever something is added to any one of them
+      -- if the old set of filteres is completely contained within the new we can keep existing work and
+      -- only search within current dxs
       --
       -- note we cannot avoid starting from scratch when we subtract something from any of the filters
       gridState <- combineDyn4 (,,,) dcols drows dfs sortState
       dxs <- gridManager $ updated gridState
-      rowCount <- mapDyn Map.size dxs
 
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
-      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
+      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop =<< mapDyn Map.size dxs
 
       dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap colToggles)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
@@ -250,13 +246,13 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       dselected <- mapDyn (leftmost . Map.elems) (joinDyn dsel)
         >>= foldDyn foldSelectSingle Map.empty . switchPromptlyDyn
 
-      exportCsv dcols $ tag (current drows) expE
-      exportCsv dcols $ tag (current dxs) expVisE
+  exportCsv dcols $ tag (current drows) expE
+  exportCsv dcols $ tag (current dxs) expVisE
 
   return (dxs, dselected)
 
   where
-    scrollDebounceDelay = 0.04 -- 25Hz
+    scrollDebounceDelay = 0.04 -- caps at 25Hz, rather arbitrary
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
@@ -270,6 +266,11 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
           wsize = tbodyHeight `div` rowHeight + 1 + x + 2*extra
       in Map.fromList . take wsize . drop skip . Map.toList $ xs
 
+    -- the position of the rowgroup is given by two css properties:
+    -- - top    - offset from the top
+    -- - height - includes content height and offset from the bottom
+    -- the main invariant being:
+    --   rowCount * rowHeight = top + height
     toRowgroupAttrs :: Int -> Int -> Map String String
     toRowgroupAttrs scrollTop rowCount = 
       let total = rowCount * rowHeight

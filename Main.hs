@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, RecursiveDo, ScopedTypeVariables, TemplateHaskell #-}
 module Main where
 
 import           Data.Aeson
@@ -16,6 +16,7 @@ import           Reflex.Dom
 
 import           LazyGrid
 
+type DynRows t = Dynamic t (Rows Int Employee)
 
 data Employee = Employee
   { firstName :: String
@@ -36,12 +37,19 @@ main = mainWidgetWithCss $(embedFile "style.css") gridExample
 
 gridExample :: MonadWidget t m => m ()
 gridExample = do
-  reloadDataE <- elClass "div" "description" $ do
+  rec metaData <- myGridView "500.json" reloadDataE
+      reloadDataE <- myDescription metaData
+  return ()
+
+myDescription :: MonadWidget t m => (DynRows t, DynRows t, DynRows t) -> m (Event t String)
+myDescription (xs, xsFiltered, xsSelected) = do
+  elClass "div" "description" $ do
     el "h2" $ text "Reflex-frp lazy grid demo"
     el "p" $ do
       text "Features:"
       el "ul" $ forM
-        [ "semantic markup (although technically the row creating action is supplied by the user so there is no hard guarantee)"
+        [ "(almost) semantic markup, a non standard <x-rowgroup> tag is used for positioning of visible rows; "
+          <> "we could also absolutely position each row separately but that would be more DOM manipulations on scroll"
         , "sorting"
         , "filtering"
         , "column selection"
@@ -49,7 +57,7 @@ gridExample = do
         , "conditional formatting using the row creating action"
         , "csv export (using html5 createObjectURL, not supported on older browsers)"
         , "scales to occupy all available space"
-        , "styled after ui-grid (but almost nothing is hardcoded so you are free to just supply a different stylesheet)"
+        , "styled after ui-grid (but almost nothing is hardcoded so it should be straightforward to supply a different stylesheet)"
         ]
         $ \s -> el "li" $ text s
     e <- el "p" $ do
@@ -61,11 +69,7 @@ gridExample = do
           [ fmap (\_ -> "500.json") $ domEvent Click e1
           , fmap (\_ -> "10000.json") $ domEvent Click e2
           ]
-    return e
 
-  (xs, xsFiltered, xsSelected) <- myGridView "500.json" reloadDataE
-
-  elClass "div" "description" $ do
     el "p" $ do
       text "Meta:"
       el "ul" $ do
@@ -86,21 +90,30 @@ gridExample = do
         el "li" $ text $ show v
 
     el "p" $ do
-      text "Bugs:"
+      text "Known bugs:"
       el "ul" $ do
         el "li" $ text "if you load a different dataset the view will not automatically reload (scroll away and back to recreate the rows)"
         el "li" $ text "arrow key scroll is broken, it locks when the currently visible rows go out of the DOM"
 
     el "p" $ do
+      text "More:"
+      el "ul" $ do
+        el "li" $ do
+          text "apparently a scrollable tbody can be a challenge in and of itself; a bare bones example of how it's currently done can be found "
+          elAttr "a" ("href" =: "https://jsfiddle.net/bakgx0yz/1/") $ text "here"
+        el "li" $ text $ "zebra is done using css :nth-child without any attrs generated in code;"
+                      <> " this is possible due to the privision that the window always starts with an odd row"
+
+    el "p" $ do
       elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "Code on Github"
 
-  return ()
+    return e
 
 
 myGridView :: (MonadWidget t m)
   => String           -- ^ JSON file to display by default
   -> Event t String   -- ^ Event with path to JSON data
-  -> m (Dynamic t (Rows Int Employee), Dynamic t (Rows Int Employee), Dynamic t (Rows Int Employee))
+  -> m (DynRows t, DynRows t, DynRows t)
 myGridView defFile reloadE = do
   pb <- getPostBuild
 
@@ -115,7 +128,7 @@ myGridView defFile reloadE = do
     (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
       case ck of
         5 -> do let t = (colValue c) k v
-                    attrs = (colAttrs c) <> ("class" =: if t == "0" then "red" else "")
+                    attrs = (colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
                 elAttr "td" attrs $ text t
         _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
     return e
@@ -152,5 +165,5 @@ columns = Map.fromList $ zip [1..]
         }
   ]
 
-matchIgnoreCase :: (Employee -> String) -> String -> Map (Int, Int) Employee -> Map (Int, Int) Employee
+matchIgnoreCase :: (Employee -> String) -> String -> Rows Int Employee -> Rows Int Employee
 matchIgnoreCase f s = Map.filter $ isInfixOf (map toLower s) . (map toLower) . f
