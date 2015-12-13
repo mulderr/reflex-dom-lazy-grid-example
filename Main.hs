@@ -48,7 +48,7 @@ myDescription (xs, xsFiltered, xsSelected) = do
     el "p" $ do
       text "Features:"
       el "ul" $ forM
-        [ "(almost) semantic markup, a non standard <x-rowgroup> tag is used for positioning of visible rows; "
+        [ "allows (almost) semantic markup, a non standard <x-rowgroup> tag is used for positioning of visible rows; "
           <> "we could also absolutely position each row separately but that would be more DOM manipulations on scroll"
         , "sorting"
         , "filtering"
