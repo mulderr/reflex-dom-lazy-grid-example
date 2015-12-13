@@ -9,7 +9,7 @@
 -- - window - the rows to be rendered from xs
 --
 -- Why not reuse virtualList:
--- - hardocded divs break semantic markup
+-- - hardcoded divs break semantic markup
 -- - positions each row absolute based on key which causes problems when filtering
 -- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row speparately
 -- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
@@ -34,12 +34,12 @@ import Control.Monad.IO.Class (liftIO)
 import qualified Data.Aeson as AE
 import Data.Default
 import Data.List (sortBy)
+import Data.Maybe (isJust)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.HashMap.Strict as HM
 import Data.Monoid ((<>))
 import qualified Data.Text as T
-import Data.Traversable (forM)
 import Text.CSV
 
 import Reflex
@@ -69,9 +69,9 @@ type Filters k = Map k String
 data Column k v = Column
   { colHeader :: String
   , colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
-  , colCompare :: Maybe (v -> v -> Ordering)              -- ^ would it be nicer to just use ord or do we need more flexibility?
+  , colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
   , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
-  , colVisible :: Bool
+  , colVisible :: Bool                                    -- ^ initial visibility
   , colAttrs :: Map String String
   }
 
@@ -153,11 +153,14 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> Int                                    -- ^ extra rows rendered on top and bottom
   -> Dynamic t (Columns k v)                -- ^ columns
   -> Dynamic t (Rows k v)                   -- ^ rows
-  -> (Columns k v -> (k, k) -> Dynamic t v -> m a) -- ^ row creating action
-  -> m (Dynamic t (Rows k v))
+  -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
+  -> m
+    ( Dynamic t (Rows k v)                  -- ^ filtred rows
+    , Dynamic t (Rows k v)                  -- ^ selected rows
+    )
 grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles)) <- resizeDetectorAttr ("class" =: containerClass) $ do
+  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
 
         -- grid menu
         (expE, expVisE, colToggles) <- el "div" $ do
@@ -181,7 +184,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
                 , toggles
                 )
 
-        (tbody, dcontrols) <- elClass "table" tableClass $ do
+        (tbody, dcontrols, dsel) <- elClass "table" tableClass $ do
           dcontrols <- el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
             sample (current dc) >>= \c -> elAttr "th" (colAttrs c) $ do
 
@@ -208,16 +211,21 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
               -- - sort button event tagged with column key :: Event t k
               return (dfilter, sortEvent)
 
-          (tbody, _) <- el' "tbody" $
+          (tbody, dsel) <- el' "tbody" $
             elDynAttr "rowgroup" rowgroupAttrs $ do
-              as <- forDyn dcs $ \cs ->
-                listWithKey window $ \k dv ->
-                  mkRow cs k dv
-              dyn as
+              -- we want to sample the columns exactly once for all rows we render - for performance
+              dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
+                  cs <- sample $ current dcs
+                  listWithKey window $ \k dv -> do
+                    v <- sample $ current dv
+                    r <- mkRow cs k v =<< mapDyn (isJust . Map.lookup k) dselected
+                    return $ fmap (const (k, v)) $ domEvent Click r
+                ) $ updated dcs
+              return dsel
 
-          return (tbody, dcontrols)
+          return (tbody, dcontrols, dsel)
 
-        return (tbody, dcontrols, expE, expVisE, colToggles)
+        return (tbody, dcontrols, expE, expVisE, colToggles, dsel)
 
       resizeE <- performEvent . mapElHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
       initHeightE <- performEvent . mapElHeight tbody $ pb
@@ -245,14 +253,16 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop rowCount
 
-      let colVisibility = joinDynThroughMap colToggles
-      dcs <- mapDyn (Map.filter (== True)) colVisibility
+      dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap colToggles)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
+
+      dselected <- mapDyn (leftmost . Map.elems) (joinDyn dsel)
+        >>= foldDyn foldSelectSingle Map.empty . switchPromptlyDyn
 
       exportCsv dcols $ tag (current drows) expE
       exportCsv dcols $ tag (current dxs) expVisE
 
-  return dxs
+  return (dxs, dselected)
 
   where
     scrollDebounceDelay = 0.04 -- 25Hz
@@ -287,6 +297,7 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
 
+    -- given column key k and GridOrdering k return sort indicator attrs for that column
     toSortIndicatorAttrs :: k -> GridOrdering k -> Map String String
     toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
       then case v of
@@ -294,6 +305,24 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
              SortAsc -> " grid-col-sort-icon-asc"
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
+
+--
+-- TODO: one of those should probably be supplied by the caller to allow choice of single vs multiple selection
+--
+
+-- single row selection
+foldSelectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
+foldSelectSingle (k, v) sel =
+  case Map.lookup k sel of
+    Just _ -> Map.empty
+    Nothing -> Map.singleton k v
+
+-- multipe row selection
+foldSelectMultiple :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
+foldSelectMultiple (k, v) sel =
+  case Map.lookup k sel of
+    Just _ -> Map.delete k sel
+    Nothing -> Map.insert k v sel
 
 toCsv :: Columns k v -> Rows k v -> String
 toCsv cols rows = printCSV $ toFields <$> Map.toList rows

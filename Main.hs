@@ -1,5 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, ScopedTypeVariables, TemplateHaskell #-}
 module Main where
 
 import Data.Aeson
@@ -37,7 +36,7 @@ main = mainWidgetWithCss $(embedFile "style.css") gridExample
 
 gridExample :: MonadWidget t m => m ()
 gridExample = do
-  reloadE <- elClass "div" "description" $ do
+  reloadDataE <- elClass "div" "description" $ do
     el "h2" $ text "Reflex-frp lazy grid demo"
     el "p" $ do
       text "Features:"
@@ -64,41 +63,27 @@ gridExample = do
           ]
     return e
 
-
-  pb <- getPostBuild
-
-  -- fetch event occurs on page load and every time we click the refresh button
-  let toReq filename = xhrRequest "GET" filename def
-  asyncReq <- performRequestAsync $ fmap toReq $ leftmost [reloadE, fmap (const "500.json") pb]
-
-  let mresp = fmap decodeXhrResponse asyncReq
-  xs <- holdDyn (Just []) mresp >>= mapDyn fromJust
-
-  xs' <- forDyn xs $ Map.fromList . zip (map (\x -> (x, x)) [1..])
-
-  dfs <- grid "my-grid" "table" 30 2 (constDyn columns) xs' $ \cs k dv -> do
-    v <- sample $ current dv
-    el "tr" $ forM (Map.toList cs) $ \(ck, c) ->
-      -- Could switch on key instead:
-      -- case ck of
-      --   5 ->
-      --   _ ->
-      case colHeader c of
-        "Employed" -> do let t = (colValue c) k v
-                             attrs = (colAttrs c) <> ("class" =: if t == "0" then "red" else "")
-                         elAttr "td" attrs $ text t
-        _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
+  (xs, xsFiltered, xsSelected) <- myGridView "500.json" reloadDataE
 
   elClass "div" "description" $ do
     el "p" $ do
-      text "Statistics:"
+      text "Meta:"
       el "ul" $ do
         el "li" $ do
           text "Row count: "
-          dynText =<< mapDyn (show . Map.size) xs'
+          dynText =<< mapDyn (show . Map.size) xs
         el "li" $ do
           text "Filtered row count: "
-          dynText =<< mapDyn (show . Map.size) dfs
+          dynText =<< mapDyn (show . Map.size) xsFiltered
+        el "li" $ do
+          text "Selected row count: "
+          dynText =<< mapDyn (show . Map.size) xsSelected
+
+    el "p" $ do
+      text "Selected rows:"
+      el "ul" $ listWithKey xsSelected $ \k dv -> do
+        v <- sample $ current dv
+        el "li" $ text $ show v
 
     el "p" $ do
       text "Bugs:"
@@ -106,12 +91,33 @@ gridExample = do
         el "li" $ text "if you load a different dataset the view will not automatically reload (scroll away and back to recreate the rows)"
         el "li" $ text "arrow key scroll is broken, it locks when the currently visible rows go out of the DOM"
 
-    el "p" $ do
-      text "Todo:"
-      el "ul" $ do
-        el "li" $ text "single row selection"
-
   return ()
+
+
+myGridView :: (MonadWidget t m)
+  => String           -- ^ JSON file to display by default
+  -> Event t String   -- ^ Event with path to JSON data
+  -> m (Dynamic t (Rows Int Employee), Dynamic t (Rows Int Employee), Dynamic t (Rows Int Employee))
+myGridView defFile reloadE = do
+  pb <- getPostBuild
+
+  let toReq filename = xhrRequest "GET" filename def
+  asyncReq <- performRequestAsync $ fmap toReq $ leftmost [reloadE, fmap (const defFile) pb]
+
+  xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
+    >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
+
+  (xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 (constDyn columns) xs $ \cs k v dsel -> do
+    attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
+    (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
+      case ck of
+        5 -> do let t = (colValue c) k v
+                    attrs = (colAttrs c) <> ("class" =: if t == "0" then "red" else "")
+                elAttr "td" attrs $ text t
+        _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
+    return e
+
+  return (xs, xsFiltered, xsSelected)
 
 
 columns :: Map Int (Column Int Employee)
