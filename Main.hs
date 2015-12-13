@@ -44,7 +44,7 @@ gridExample = do
 myDescription :: MonadWidget t m => (DynRows t, DynRows t, DynRows t) -> m (Event t String)
 myDescription (xs, xsFiltered, xsSelected) = do
   elClass "div" "description" $ do
-    el "h2" $ text "Reflex-frp lazy grid demo"
+    el "h2" $ text "Reflex-dom lazy grid demo"
     el "p" $ do
       text "Features:"
       el "ul" $ forM
