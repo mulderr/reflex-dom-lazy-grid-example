@@ -123,7 +123,7 @@ myGridView defFile reloadE = do
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
 
-  (xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 (constDyn columns) xs $ \cs k v dsel -> do
+  (xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs $ \cs k v dsel -> do
     attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
     (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
       case ck of

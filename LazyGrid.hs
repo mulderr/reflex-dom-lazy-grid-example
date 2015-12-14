@@ -42,6 +42,7 @@ import           Data.Maybe (isJust)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Monoid ((<>))
+import           Data.Time.Clock (NominalDiffTime)
 import           Text.CSV
 
 import           GHCJS.DOM.Element (getOffsetHeight)
@@ -143,6 +144,7 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> String                                 -- ^ css class applied to <table>
   -> Int                                    -- ^ row height in px
   -> Int                                    -- ^ extra rows rendered on top and bottom
+  -> NominalDiffTime                        -- ^ debounce delay, 0.01 seems reasonable
   -> Dynamic t (Columns k v)                -- ^ columns
   -> Dynamic t (Rows k v)                   -- ^ rows
   -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
@@ -150,7 +152,7 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
      ( Dynamic t (Rows k v)                 -- ^ filtred rows
      , Dynamic t (Rows k v)                 -- ^ selected rows
      )
-grid containerClass tableClass rowHeight extra dcols drows mkRow = do
+grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
 
@@ -221,9 +223,9 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
 
       -- height and top scroll
       initHeightE <- performEvent $ mapElHeight tbody pb
-      resizeE <- performEvent . mapElHeight tbody =<< debounce scrollDebounceDelay gridResizeEvent
+      resizeE <- performEvent . mapElHeight tbody =<< debounceShield gridResizeEvent
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
-      scrollTop <- holdDyn 0 =<< debounce scrollDebounceDelay (domEvent Scroll tbody)
+      scrollTop <- holdDyn 0 =<< debounceShield (domEvent Scroll tbody)
 
       -- split controls into filters and sort events
       dfs <- return . joinDynThroughMap =<< mapDyn (Map.map fst) dcontrols
@@ -252,10 +254,14 @@ grid containerClass tableClass rowHeight extra dcols drows mkRow = do
   return (dxs, dselected)
 
   where
-    scrollDebounceDelay = 0.04 -- caps at 25Hz, rather arbitrary
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
     mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
+
+    -- if the delay is given to be 0 there is no point in calling debounce
+    debounceShield = case debounceDelay of
+                       0 -> return
+                       _ -> debounce debounceDelay
 
     -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
     toWindow :: Rows k v -> Int -> Int -> Rows k v
