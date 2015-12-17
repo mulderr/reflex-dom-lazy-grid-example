@@ -60,7 +60,8 @@ type Filters k = Map k String
 
 -- | Column specification.
 data Column k v = Column
-  { colHeader :: String
+  { colName :: String                                     -- ^ column name
+  , colHeader :: String                                   -- ^ column header
   , colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
   , colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
   , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
@@ -69,11 +70,12 @@ data Column k v = Column
   }
 
 instance Eq (Column k v) where
-  x == y = colHeader x == colHeader y
+  x == y = colName x == colName y
 
 instance Default (Column k v) where
   def = Column
-    { colHeader = ""
+    { colName = ""
+    , colHeader = ""
     , colValue = (\_ _ -> "")
     , colCompare = Nothing
     , colFilter = Nothing

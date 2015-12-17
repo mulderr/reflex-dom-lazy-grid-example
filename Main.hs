@@ -126,10 +126,10 @@ myGridView defFile reloadE = do
   (xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs $ \cs k v dsel -> do
     attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
     (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
-      case ck of
-        5 -> do let t = (colValue c) k v
-                    attrs = (colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
-                elAttr "td" attrs $ text t
+      case (colName c) of
+        "employed" -> do let t = (colValue c) k v
+                             attrs = (colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
+                         elAttr "td" attrs $ text t
         _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
     return e
 
@@ -138,26 +138,31 @@ myGridView defFile reloadE = do
 
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
-  [ def { colHeader = "No."
+  [ def { colName = "no"
+        , colHeader = "No."
         , colValue = (\(k, _) _ -> show k)
         , colAttrs = ("style" =: "width: 50px;")
         }
-  , def { colHeader = "First name"
+  , def { colName = "fname"
+        , colHeader = "First name"
         , colValue = const firstName
         , colFilter = Just $ matchIgnoreCase firstName
         , colCompare = Just $ (\a b -> firstName a `compare` firstName b)
         }
-  , def { colHeader = "Last name"
+  , def { colName = "lname"
+        , colHeader = "Last name"
         , colValue = const lastName
         , colFilter = Just $ matchIgnoreCase lastName
         , colCompare = Just $ (\a b -> lastName a `compare` lastName b)
         }
-  , def { colHeader = "Company"
+  , def { colName = "company"
+        , colHeader = "Company"
         , colValue = const company
         , colFilter = Just $ matchIgnoreCase company
         , colCompare = Just $ (\a b -> company a `compare` company b)
         }
-  , def { colHeader = "Employed"
+  , def { colName = "employed"
+        , colHeader = "Employed"
         , colValue = (\_ -> show . fromEnum . employed)
         , colFilter = Just $ (\s -> Map.filter $ (==) s . show . fromEnum . employed)
         , colCompare = Just $ (\a b -> employed a `compare` employed b)
