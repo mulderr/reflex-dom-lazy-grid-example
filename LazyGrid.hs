@@ -213,7 +213,7 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
                   listWithKey window $ \k dv -> do
                     v <- sample $ current dv
                     r <- mkRow cs k v =<< mapDyn (isJust . Map.lookup k) dselected
-                    return $ fmap (const (k, v)) $ domEvent Click r
+                    return $ (k, v) <$ domEvent Click r
                 ) $ updated dcs
               return dsel
 

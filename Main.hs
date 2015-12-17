@@ -66,8 +66,8 @@ myDescription (xs, xsFiltered, xsSelected) = do
         (e1, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "500 rows"
         (e2, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "10k rows"
         return $ leftmost
-          [ fmap (\_ -> "500.json") $ domEvent Click e1
-          , fmap (\_ -> "10000.json") $ domEvent Click e2
+          [ "500.json" <$ domEvent Click e1
+          , "10000.json" <$ domEvent Click e2
           ]
 
     el "p" $ do
@@ -118,7 +118,7 @@ myGridView defFile reloadE = do
   pb <- getPostBuild
 
   let toReq filename = xhrRequest "GET" filename def
-  asyncReq <- performRequestAsync $ fmap toReq $ leftmost [reloadE, fmap (const defFile) pb]
+  asyncReq <- performRequestAsync $ fmap toReq $ leftmost [reloadE, defFile <$ pb]
 
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
