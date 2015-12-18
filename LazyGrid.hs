@@ -1,32 +1,4 @@
 {-# LANGUAGE RecursiveDo, ScopedTypeVariables #-}
-
--- Lazy grid - based on virtualList code, styled after ui-grid.
---
--- Uses resizeDetector to keep track of height and renders as many rows as needed + extra.
---
--- Terminology:
--- - cs     - visible columns
--- - xs     - filtered sorted rows
--- - window - the rows to be rendered from xs
---
--- Why not reuse virtualList:
--- - hardcoded divs break semantic markup
--- - positions each row absolute based on key which causes problems when filtering
--- - since we can assume there are no holes between rows we can instead position a container eg. rowgroup instead of each row speparately
--- - we can keep track of the details ourselves and implement weird guarantees eg. we always start with odd row to allow :nth-child zebra
---
--- Whats with the tuple key?
--- - listWithKey does a shallow diff on keys and will not re-render rows unless the keys change
--- - with Map k v sorting does not change the set of keys in any way thus the dom would not be updated
--- - to work around the above we use a composite key (k, k) first component is used for ordering (see Ord for (a, a)), second
---   is the row id (or original position), this way the map is always ordered according to current sort but listWithKey will
---   notice changes
--- - yes, it is awkard, i wonder if using listWithKeyShallowDiff would make this go away
---
--- TODO:
--- - probably use listWithKeyShallowDiff instead of a Dynamic window, how much does it affect peformance?
--- - performance tuning
---
 module LazyGrid 
   ( Rows
   , Columns
@@ -102,7 +74,6 @@ data GridOrdering k = GridOrdering k SortOrder
 instance Default k => Default (GridOrdering k) where
   def = GridOrdering def def
 
-
 -- | Handles model changes in response to filtering or sorting.
 gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
@@ -140,6 +111,97 @@ gridSort cols (GridOrdering k sortOrder) xs =
     reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
 
 
+gridMenu :: forall t m k v . (MonadWidget t m, Ord k)
+  => Dynamic t (Columns k v) -- ^ columns
+  -> m
+     ( Event t () -- ^ export data event
+     , Event t () -- ^ export visible data event
+     , Dynamic t (Map k (Dynamic t Bool)) -- ^ column visibility
+     )
+gridMenu dcols = el "div" $ do
+  (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
+  menuOpen <- toggle False $ domEvent Click menuToggle
+  menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
+
+  elDynAttr "div" menuAttrs $ do
+    elClass "ul" "grid-menu-list" $ do
+      (exportEl, _) <- el' "li" $ text "Export all data as csv"
+      (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
+      toggles <- listWithKey dcols $ \k dc ->
+        sample (current dc) >>= \c -> el "div" $ do
+          rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ colHeader c
+              dt <- toggle (colVisible c) (domEvent Click toggleEl :: Event t ())
+              attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
+          return dt
+      return
+        ( domEvent Click exportEl :: Event t ()
+        , domEvent Click exportVisibleEl :: Event t ()
+        , toggles
+        )
+
+
+gridHead :: forall t m k v . (MonadWidget t m, Ord k)
+  => Dynamic t (Columns k v)      -- ^ columns
+  -> Dynamic t (GridOrdering k)   -- ^ ordering
+  -> m (Dynamic t (Map k (Dynamic t String, Event t k)))  -- ^ column filters and sort events
+gridHead dcs dordering = el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
+  sample (current dc) >>= \c -> elAttr "th" (colAttrs c) $ do
+    -- header and sort controls
+    let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (colCompare c)
+    sortAttrs <- mapDyn (toSortIndicatorAttrs k) dordering
+    (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
+      text (colHeader c)
+      elDynAttr "span" sortAttrs $ return ()
+
+    let sortEvent = case colCompare c of
+                      Just _ -> tag (constant k) $ domEvent Click sortEl
+                      Nothing -> never
+
+    -- filter controls
+    dfilter <- case colFilter c of
+      Just f -> do
+        ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
+        return $ _textInput_value ti
+      Nothing -> return $ constDyn $ ""
+
+    return (dfilter, sortEvent)
+
+  where
+    -- given column key k and GridOrdering k return sort indicator attrs for that column
+    toSortIndicatorAttrs :: k -> GridOrdering k -> Map String String
+    toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
+      then case v of
+             SortNone -> ""
+             SortAsc -> " grid-col-sort-icon-asc"
+             SortDesc -> " grid-col-sort-icon-desc"
+      else "")
+
+
+gridBody :: forall t m k v . (MonadWidget t m, Ord k)
+  => Dynamic t (Columns k v)        -- ^ visible columns
+  -> Dynamic t (Rows k v)           -- ^ window
+  -> Dynamic t (Rows k v)           -- ^ selected rows
+  -> Dynamic t (Map String String)  -- ^ x-rowgroup attrs
+  -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
+  -> m
+     ( El t                                           -- ^ tbody element
+     , Dynamic t (Map (k, k) (Event t ((k, k), v)))   -- ^ row selection events
+     )
+gridBody dcs window dselected dattrs mkRow = el' "tbody" $
+  -- i am not sure it is legal to have a custom element directly under tbody
+  -- if not then what consequences does it have?
+  elDynAttr "x-rowgroup" dattrs $ do
+    dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
+        -- we want to sample the columns exactly once for all rows we render
+        cs <- sample $ current dcs
+        listWithKey window $ \k dv -> do
+          v <- sample $ current dv
+          r <- mkRow cs k v =<< mapDyn (isJust . Map.lookup k) dselected
+          return $ (k, v) <$ domEvent Click r
+      ) $ updated dcs
+    return $ joinDyn dsel
+
+
 -- | Grid view.
 grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   => String                                 -- ^ css class applied to <div> container
@@ -157,68 +219,11 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
 grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow = do
   pb <- getPostBuild
   rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
-
-        -- grid menu
-        (expE, expVisE, colToggles) <- el "div" $ do
-          (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
-          menuOpen <- toggle False $ domEvent Click menuToggle
-          menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
-
-          elDynAttr "div" menuAttrs $ do
-            elClass "ul" "grid-menu-list" $ do
-              (exportEl, _) <- el' "li" $ text "Export all data as csv"
-              (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
-              toggles <- listWithKey dcols $ \k dc ->
-                sample (current dc) >>= \c -> el "div" $ do
-                  rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ colHeader c
-                      dt <- toggle (colVisible c) (domEvent Click toggleEl :: Event t ())
-                      attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
-                  return dt
-              return
-                ( domEvent Click exportEl :: Event t ()
-                , domEvent Click exportVisibleEl :: Event t ()
-                , toggles
-                )
+        (expE, expVisE, colToggles) <- gridMenu dcols
 
         (tbody, dcontrols, dsel) <- elClass "table" tableClass $ do
-          dcontrols <- el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
-            sample (current dc) >>= \c -> elAttr "th" (colAttrs c) $ do
-
-              -- header and sort controls
-              let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (colCompare c)
-              sortAttrs <- mapDyn (toSortIndicatorAttrs k) sortState
-              (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
-                text (colHeader c)
-                elDynAttr "span" sortAttrs $ return ()
-
-              let sortEvent = case colCompare c of
-                                Just _ -> tag (constant k) $ domEvent Click sortEl
-                                Nothing -> never
-
-              -- filter controls
-              dfilter <- case colFilter c of
-                Just f -> do
-                  ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
-                  return $ _textInput_value ti
-                Nothing -> return $ constDyn $ ""
-
-              -- for each column we return:
-              -- - filter string :: Dynamic t String
-              -- - sort button event tagged with column key :: Event t k
-              return (dfilter, sortEvent)
-
-          (tbody, dsel) <- el' "tbody" $
-            elDynAttr "x-rowgroup" rowgroupAttrs $ do
-              dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
-                  -- we want to sample the columns exactly once for all rows we render
-                  cs <- sample $ current dcs
-                  listWithKey window $ \k dv -> do
-                    v <- sample $ current dv
-                    r <- mkRow cs k v =<< mapDyn (isJust . Map.lookup k) dselected
-                    return $ (k, v) <$ domEvent Click r
-                ) $ updated dcs
-              return dsel
-
+          dcontrols <- gridHead dcs sortState
+          (tbody, dsel) <- gridBody dcs window dselected rowgroupAttrs mkRow
           return (tbody, dcontrols, dsel)
 
         return (tbody, dcontrols, expE, expVisE, colToggles, dsel)
@@ -247,7 +252,7 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
       dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap colToggles)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
 
-      dselected <- mapDyn (leftmost . Map.elems) (joinDyn dsel)
+      dselected <- mapDyn (leftmost . Map.elems) dsel
         >>= foldDyn foldSelectSingle Map.empty . switchPromptlyDyn
 
   exportCsv dcols $ tag (current drows) expE
@@ -296,15 +301,6 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
     toSortState :: Event t k -> m (Dynamic t (GridOrdering k))
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
-
-    -- given column key k and GridOrdering k return sort indicator attrs for that column
-    toSortIndicatorAttrs :: k -> GridOrdering k -> Map String String
-    toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
-      then case v of
-             SortNone -> ""
-             SortAsc -> " grid-col-sort-icon-asc"
-             SortDesc -> " grid-col-sort-icon-desc"
-      else "")
 
 --
 -- TODO: one of those should probably be supplied by the caller to allow choice of single vs multiple selection
