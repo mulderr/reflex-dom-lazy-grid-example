@@ -116,6 +116,7 @@ gridMenu :: forall t m k v . (MonadWidget t m, Ord k)
   -> m
      ( Event t () -- ^ export data event
      , Event t () -- ^ export visible data event
+     , Event t () -- ^ export selected data event
      , Dynamic t (Map k (Dynamic t Bool)) -- ^ column visibility
      )
 gridMenu dcols = el "div" $ do
@@ -127,6 +128,7 @@ gridMenu dcols = el "div" $ do
     elClass "ul" "grid-menu-list" $ do
       (exportEl, _) <- el' "li" $ text "Export all data as csv"
       (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
+      (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
       toggles <- listWithKey dcols $ \k dc ->
         sample (current dc) >>= \c -> el "div" $ do
           rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ colHeader c
@@ -134,8 +136,9 @@ gridMenu dcols = el "div" $ do
               attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
           return dt
       return
-        ( domEvent Click exportEl :: Event t ()
-        , domEvent Click exportVisibleEl :: Event t ()
+        ( domEvent Click exportEl
+        , domEvent Click exportVisibleEl
+        , domEvent Click exportSelectedEl
         , toggles
         )
 
@@ -213,20 +216,21 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> Dynamic t (Rows k v)                   -- ^ rows
   -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
   -> m
-     ( Dynamic t (Rows k v)                 -- ^ filtred rows
+     ( Dynamic t (Columns k v)              -- ^ visible columns
+     , Dynamic t (Rows k v)                 -- ^ filtred rows
      , Dynamic t (Rows k v)                 -- ^ selected rows
      )
 grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
-        (expE, expVisE, colToggles) <- gridMenu dcols
+  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, expSelE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
+        (expE, expVisE, expSelE, colToggles) <- gridMenu dcols
 
         (tbody, dcontrols, dsel) <- elClass "table" tableClass $ do
           dcontrols <- gridHead dcs sortState
           (tbody, dsel) <- gridBody dcs window dselected rowgroupAttrs mkRow
           return (tbody, dcontrols, dsel)
 
-        return (tbody, dcontrols, expE, expVisE, colToggles, dsel)
+        return (tbody, dcontrols, expE, expVisE, expSelE, colToggles, dsel)
 
       -- height and top scroll
       initHeightE <- performEvent $ mapElHeight tbody pb
@@ -253,12 +257,13 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
 
       dselected <- mapDyn (leftmost . Map.elems) dsel
-        >>= foldDyn foldSelectSingle Map.empty . switchPromptlyDyn
+        >>= foldDyn foldSelectMultiple Map.empty . switchPromptlyDyn
 
   exportCsv dcols $ tag (current drows) expE
   exportCsv dcols $ tag (current dxs) expVisE
+  exportCsv dcols $ tag (current dselected) expSelE
 
-  return (dxs, dselected)
+  return (dcs, dxs, dselected)
 
   where
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)

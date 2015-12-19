@@ -9,6 +9,7 @@ import           Data.Maybe (fromJust)
 import           Data.Monoid ((<>))
 import           Data.Map (Map)
 import qualified Data.Map as Map
+import           Safe
 import           Data.Traversable (forM)
 
 import           Reflex
@@ -17,6 +18,7 @@ import           Reflex.Dom
 import           LazyGrid
 
 type DynRows t = Dynamic t (Rows Int Employee)
+type DynCols t = Dynamic t (Columns Int Employee)
 
 data Employee = Employee
   { firstName :: String
@@ -41,8 +43,8 @@ gridExample = do
       reloadDataE <- myDescription metaData
   return ()
 
-myDescription :: MonadWidget t m => (DynRows t, DynRows t, DynRows t) -> m (Event t String)
-myDescription (xs, xsFiltered, xsSelected) = do
+myDescription :: MonadWidget t m => (DynRows t, DynRows t, DynRows t, DynCols t) -> m (Event t String)
+myDescription (xs, xsFiltered, xsSelected, dcs) = do
   elClass "div" "description" $ do
     el "h2" $ text "Reflex-dom lazy grid demo"
     el "p" $ do
@@ -82,6 +84,9 @@ myDescription (xs, xsFiltered, xsSelected) = do
         el "li" $ do
           text "Selected row count: "
           dynText =<< mapDyn (show . Map.size) xsSelected
+        el "li" $ do
+          text "Visible column count: "
+          dynText =<< mapDyn (show . Map.size) dcs
 
     el "p" $ do
       text "Selected rows:"
@@ -113,7 +118,7 @@ myDescription (xs, xsFiltered, xsSelected) = do
 myGridView :: (MonadWidget t m)
   => String           -- ^ JSON file to display by default
   -> Event t String   -- ^ Event with path to JSON data
-  -> m (DynRows t, DynRows t, DynRows t)
+  -> m (DynRows t, DynRows t, DynRows t, DynCols t)
 myGridView defFile reloadE = do
   pb <- getPostBuild
 
@@ -123,7 +128,7 @@ myGridView defFile reloadE = do
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
 
-  (xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs $ \cs k v dsel -> do
+  (dcs, xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs $ \cs k v dsel -> do
     attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
     (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
       case (colName c) of
@@ -133,7 +138,7 @@ myGridView defFile reloadE = do
         _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
     return e
 
-  return (xs, xsFiltered, xsSelected)
+  return (xs, xsFiltered, xsSelected, dcs)
 
 
 columns :: Map Int (Column Int Employee)
@@ -155,6 +160,14 @@ columns = Map.fromList $ zip [1..]
         , colFilter = Just $ matchIgnoreCase lastName
         , colCompare = Just $ (\a b -> lastName a `compare` lastName b)
         }
+  -- example of a column computed from two fields
+  , def { colName = "initials"
+        , colHeader = "Initials"
+        , colValue = const initials
+        , colFilter = Just $ matchIgnoreCase initials
+        , colCompare = Just $ (\a b -> initials a `compare` initials b)
+        , colVisible = False
+        }
   , def { colName = "company"
         , colHeader = "Company"
         , colValue = const company
@@ -169,6 +182,9 @@ columns = Map.fromList $ zip [1..]
         , colAttrs = ("style" =: "width: 80px;")
         }
   ]
+
+initials :: Employee -> String
+initials e = headDef ' ' (firstName e) : '.' : headDef ' ' (lastName e) : '.' : ""
 
 matchIgnoreCase :: (Employee -> String) -> String -> Rows Int Employee -> Rows Int Employee
 matchIgnoreCase f s = Map.filter $ isInfixOf (map toLower s) . (map toLower) . f
