@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, RecursiveDo, ScopedTypeVariables, TemplateHaskell #-}
 module Main where
 
+import           Control.Lens
 import           Data.Aeson
 import           Data.Char (toLower)
 import           Data.FileEmbed
@@ -17,8 +18,6 @@ import           Reflex.Dom
 
 import           LazyGrid
 
-type DynRows t = Dynamic t (Rows Int Employee)
-type DynCols t = Dynamic t (Columns Int Employee)
 
 data Employee = Employee
   { firstName :: String
@@ -43,8 +42,8 @@ gridExample = do
       reloadDataE <- myDescription metaData
   return ()
 
-myDescription :: MonadWidget t m => (DynRows t, DynRows t, DynRows t, DynCols t) -> m (Event t String)
-myDescription (xs, xsFiltered, xsSelected, dcs) = do
+myDescription :: MonadWidget t m => Grid t Int Employee -> m (Event t String)
+myDescription g = do
   elClass "div" "description" $ do
     el "h2" $ text "Reflex-dom lazy grid demo"
     el "p" $ do
@@ -76,21 +75,24 @@ myDescription (xs, xsFiltered, xsSelected, dcs) = do
       text "Meta:"
       el "ul" $ do
         el "li" $ do
-          text "Row count: "
-          dynText =<< mapDyn (show . Map.size) xs
-        el "li" $ do
-          text "Filtered row count: "
-          dynText =<< mapDyn (show . Map.size) xsFiltered
-        el "li" $ do
-          text "Selected row count: "
-          dynText =<< mapDyn (show . Map.size) xsSelected
+          text "Column count: "
+          dynText =<< mapDyn (show . Map.size) (_grid_columns g)
         el "li" $ do
           text "Visible column count: "
-          dynText =<< mapDyn (show . Map.size) dcs
+          dynText =<< mapDyn (show . Map.size) (_grid_columnsVisible g)
+        el "li" $ do
+          text "Row count: "
+          dynText =<< mapDyn (show . Map.size) (_grid_rows g)
+        el "li" $ do
+          text "Filtered row count: "
+          dynText =<< mapDyn (show . Map.size) (_grid_rowsFiltered g)
+        el "li" $ do
+          text "Selected row count: "
+          dynText =<< mapDyn (show . Map.size) (_grid_rowsSelected g)
 
     el "p" $ do
       text "Selected rows:"
-      el "ul" $ listWithKey xsSelected $ \k dv -> do
+      el "ul" $ listWithKey (_grid_rowsSelected g) $ \k dv -> do
         v <- sample $ current dv
         el "li" $ text $ show v
 
@@ -114,11 +116,10 @@ myDescription (xs, xsFiltered, xsSelected, dcs) = do
 
     return e
 
-
 myGridView :: (MonadWidget t m)
   => String           -- ^ JSON file to display by default
   -> Event t String   -- ^ Event with path to JSON data
-  -> m (DynRows t, DynRows t, DynRows t, DynCols t)
+  -> m (Grid t Int Employee)
 myGridView defFile reloadE = do
   pb <- getPostBuild
 
@@ -128,58 +129,59 @@ myGridView defFile reloadE = do
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
 
-  (dcs, xsFiltered, xsSelected) <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs $ \cs k v dsel -> do
+  g <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs selectSingle $ \cs k v dsel -> do
     attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
     (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
-      case (colName c) of
-        "employed" -> do let t = (colValue c) k v
-                             attrs = (colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
+      case _colName c of
+        "employed" -> do let t = (_colValue c) k v
+                             attrs = (_colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
                          elAttr "td" attrs $ text t
-        _ -> elAttr "td" (colAttrs c) $ text ((colValue c) k v)
+        _ -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
     return e
 
-  return (xs, xsFiltered, xsSelected, dcs)
+  return g
 
 
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
-  [ def { colName = "no"
-        , colHeader = "No."
-        , colValue = (\(k, _) _ -> show k)
-        , colAttrs = ("style" =: "width: 50px;")
+  [ def { _colName     = "no"
+        , _colHeader   = "No."
+        , _colValue    = (\(k, _) _ -> show k)
+        , _colAttrs    = ("style" =: "width: 50px;")
         }
-  , def { colName = "fname"
-        , colHeader = "First name"
-        , colValue = const firstName
-        , colFilter = Just $ matchIgnoreCase firstName
-        , colCompare = Just $ (\a b -> firstName a `compare` firstName b)
+  , def { _colName     = "fname"
+        , _colHeader   = "First name"
+        , _colValue    = const firstName
+        , _colFilter   = Just $ matchIgnoreCase firstName
+        , _colCompare  = Just (\a b -> firstName a `compare` firstName b)
         }
-  , def { colName = "lname"
-        , colHeader = "Last name"
-        , colValue = const lastName
-        , colFilter = Just $ matchIgnoreCase lastName
-        , colCompare = Just $ (\a b -> lastName a `compare` lastName b)
+  , def { _colName     = "lname"
+        , _colHeader   = "Last name"
+        , _colValue    = const lastName
+        , _colFilter   = Just $ matchIgnoreCase lastName
+        , _colCompare  = Just (\a b -> lastName a `compare` lastName b)
         }
   -- example of a column computed from two fields
-  , def { colName = "initials"
-        , colHeader = "Initials"
-        , colValue = const initials
-        , colFilter = Just $ matchIgnoreCase initials
-        , colCompare = Just $ (\a b -> initials a `compare` initials b)
-        , colVisible = False
+  , def { _colName     = "initials"
+        , _colHeader   = "Initials"
+        , _colValue    = const initials
+        , _colFilter   = Just $ matchIgnoreCase initials
+        , _colCompare  = Just (\a b -> initials a `compare` initials b)
+        , _colVisible  = False
+        , _colAttrs    = ("style" =: "width: 80px;")
         }
-  , def { colName = "company"
-        , colHeader = "Company"
-        , colValue = const company
-        , colFilter = Just $ matchIgnoreCase company
-        , colCompare = Just $ (\a b -> company a `compare` company b)
+  , def { _colName     = "company"
+        , _colHeader   = "Company"
+        , _colValue    = const company
+        , _colFilter   = Just $ matchIgnoreCase company
+        , _colCompare  = Just (\a b -> company a `compare` company b)
         }
-  , def { colName = "employed"
-        , colHeader = "Employed"
-        , colValue = (\_ -> show . fromEnum . employed)
-        , colFilter = Just $ (\s -> Map.filter $ (==) s . show . fromEnum . employed)
-        , colCompare = Just $ (\a b -> employed a `compare` employed b)
-        , colAttrs = ("style" =: "width: 80px;")
+  , def { _colName     = "employed"
+        , _colHeader   = "Employed"
+        , _colValue    = (\_ -> show . fromEnum . employed)
+        , _colFilter   = Just (\s -> Map.filter $ (==) s . show . fromEnum . employed)
+        , _colCompare  = Just (\a b -> employed a `compare` employed b)
+        , _colAttrs    = ("style" =: "width: 80px;")
         }
   ]
 

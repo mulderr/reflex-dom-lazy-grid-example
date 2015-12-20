@@ -1,12 +1,28 @@
-{-# LANGUAGE RecursiveDo, ScopedTypeVariables #-}
+{-# LANGUAGE RecursiveDo, ScopedTypeVariables, TemplateHaskell #-}
 module LazyGrid 
   ( Rows
   , Columns
   , Column (..)
+  , Grid (..)
+
+  -- ^ Lenses
+  , colName
+  , colHeader
+  , colValue
+  , colCompare
+  , colFilter
+  , colVisible
+  , colAttrs
+
+  -- ^ Widgets
   , grid
+
+  -- ^ Row selection strageties
+  , selectSingle
+  , selectMultiple
   ) where
 
-import           Control.Lens ((^.))
+import           Control.Lens ((^.), makeLenses)
 import           Control.Monad.IO.Class (liftIO)
 import           Data.Default
 import           Data.List (sortBy)
@@ -30,29 +46,31 @@ type Columns k v = Map k (Column k v)
 type Rows k v = Map (k, k) v
 type Filters k = Map k String
 
--- | Column specification.
+-- | Grid column.
 data Column k v = Column
-  { colName :: String                                     -- ^ column name
-  , colHeader :: String                                   -- ^ column header
-  , colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
-  , colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
-  , colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
-  , colVisible :: Bool                                    -- ^ initial visibility
-  , colAttrs :: Map String String                         -- ^ element attrs applied to <th> and available for use in row action
+  { _colName :: String                                     -- ^ column name
+  , _colHeader :: String                                   -- ^ column header
+  , _colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
+  , _colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
+  , _colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
+  , _colVisible :: Bool                                    -- ^ initial visibility
+  , _colAttrs :: Map String String                         -- ^ element attrs applied to <th> and available for use in row action
   }
 
+makeLenses ''Column
+
 instance Eq (Column k v) where
-  x == y = colName x == colName y
+  x == y = _colName x == _colName y
 
 instance Default (Column k v) where
   def = Column
-    { colName = ""
-    , colHeader = ""
-    , colValue = (\_ _ -> "")
-    , colCompare = Nothing
-    , colFilter = Nothing
-    , colVisible = True
-    , colAttrs = Map.empty
+    { _colName = ""
+    , _colHeader = ""
+    , _colValue = (\_ _ -> "")
+    , _colCompare = Nothing
+    , _colFilter = Nothing
+    , _colVisible = True
+    , _colAttrs = Map.empty
     }
 
 -- | Column ordering.
@@ -74,6 +92,31 @@ data GridOrdering k = GridOrdering k SortOrder
 instance Default k => Default (GridOrdering k) where
   def = GridOrdering def def
 
+data Grid t k v
+   = Grid { _grid_columns :: Dynamic t (Columns k v)
+          , _grid_columnsVisible :: Dynamic t (Columns k v)
+          , _grid_rows :: Dynamic t (Rows k v)
+          , _grid_rowsFiltered :: Dynamic t (Rows k v)
+          , _grid_rowsSelected :: Dynamic t (Rows k v)
+          , _grid_select :: Event t ((k,k), v)
+          }
+
+data GridMenu t k
+   = GridMenu { _gridMenu_export :: Event t ()
+              , _gridMenu_exportVisible :: Event t ()
+              , _gridMenu_exportSelected :: Event t ()
+              , _gridMenu_columnVisibility :: Dynamic t (Map k (Dynamic t Bool))
+              }
+
+data GridHead t k
+   = GridHead { _gridHead_columnFilters :: Dynamic t (Map k (Dynamic t String))
+              , _gridHead_columnSorts :: Dynamic t (Map k (Event t k))
+              }
+
+makeLenses ''Grid
+makeLenses ''GridMenu
+makeLenses ''GridHead
+
 -- | Handles model changes in response to filtering or sorting.
 gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
@@ -91,7 +134,7 @@ gridFilter cols fs xs =
     applyOne _ _ "" xs = xs
     applyOne cols k s xs = case Map.lookup k cols of
                              Nothing -> xs
-                             Just c -> case colFilter c of
+                             Just c -> case _colFilter c of
                                          Just f -> f s xs
                                          Nothing -> xs
 
@@ -102,7 +145,7 @@ gridSort cols (GridOrdering k sortOrder) xs =
     Nothing -> xs
     Just f -> Map.fromList $ reorder $ f $ Map.toList xs
   where
-    maybeSortFunc k cols = Map.lookup k cols >>= colCompare >>= \f ->
+    maybeSortFunc k cols = Map.lookup k cols >>= _colCompare >>= \f ->
       let f' = (\(_, v1) (_, v2) -> f v1 v2)
       in case sortOrder of
         SortNone -> Nothing
@@ -113,12 +156,7 @@ gridSort cols (GridOrdering k sortOrder) xs =
 
 gridMenu :: forall t m k v . (MonadWidget t m, Ord k)
   => Dynamic t (Columns k v) -- ^ columns
-  -> m
-     ( Event t () -- ^ export data event
-     , Event t () -- ^ export visible data event
-     , Event t () -- ^ export selected data event
-     , Dynamic t (Map k (Dynamic t Bool)) -- ^ column visibility
-     )
+  -> m (GridMenu t k)
 gridMenu dcols = el "div" $ do
   (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
   menuOpen <- toggle False $ domEvent Click menuToggle
@@ -131,43 +169,46 @@ gridMenu dcols = el "div" $ do
       (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
       toggles <- listWithKey dcols $ \k dc ->
         sample (current dc) >>= \c -> el "div" $ do
-          rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ colHeader c
-              dt <- toggle (colVisible c) (domEvent Click toggleEl :: Event t ())
+          rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ _colHeader c
+              dt <- toggle (_colVisible c) (domEvent Click toggleEl)
               attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
           return dt
-      return
-        ( domEvent Click exportEl
-        , domEvent Click exportVisibleEl
-        , domEvent Click exportSelectedEl
-        , toggles
-        )
+      return $ GridMenu
+        (domEvent Click exportEl)
+        (domEvent Click exportVisibleEl)
+        (domEvent Click exportSelectedEl)
+        toggles
 
 
 gridHead :: forall t m k v . (MonadWidget t m, Ord k)
   => Dynamic t (Columns k v)      -- ^ columns
   -> Dynamic t (GridOrdering k)   -- ^ ordering
-  -> m (Dynamic t (Map k (Dynamic t String, Event t k)))  -- ^ column filters and sort events
-gridHead dcs dordering = el "thead" $ el "tr" $ listWithKey dcs $ \k dc ->
-  sample (current dc) >>= \c -> elAttr "th" (colAttrs c) $ do
+  -> m (GridHead t k)
+gridHead dcs dordering = el "thead" $ el "tr" $ do
+  dcontrols <- listWithKey dcs $ \k dc -> sample (current dc) >>= \c -> elAttr "th" (_colAttrs c) $ do
     -- header and sort controls
-    let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (colCompare c)
+    let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (_colCompare c)
     sortAttrs <- mapDyn (toSortIndicatorAttrs k) dordering
     (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
-      text (colHeader c)
+      text (_colHeader c)
       elDynAttr "span" sortAttrs $ return ()
 
-    let sortEvent = case colCompare c of
+    let sortEvent = case _colCompare c of
                       Just _ -> tag (constant k) $ domEvent Click sortEl
                       Nothing -> never
 
     -- filter controls
-    dfilter <- case colFilter c of
+    dfilter <- case _colFilter c of
       Just f -> do
         ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
         return $ _textInput_value ti
       Nothing -> return $ constDyn $ ""
 
     return (dfilter, sortEvent)
+  
+  dfilters <- mapDyn (Map.map fst) dcontrols
+  dsorts <- mapDyn (Map.map snd) dcontrols
+  return $ GridHead dfilters dsorts
 
   where
     -- given column key k and GridOrdering k return sort indicator attrs for that column
@@ -214,23 +255,20 @@ grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
   -> NominalDiffTime                        -- ^ debounce delay, 0.01 seems reasonable
   -> Dynamic t (Columns k v)                -- ^ columns
   -> Dynamic t (Rows k v)                   -- ^ rows
+  -> (((k, k), v) -> Rows k v -> Rows k v)  -- ^ selection strategy
   -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
-  -> m
-     ( Dynamic t (Columns k v)              -- ^ visible columns
-     , Dynamic t (Rows k v)                 -- ^ filtred rows
-     , Dynamic t (Rows k v)                 -- ^ selected rows
-     )
-grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow = do
+  -> m (Grid t k v)
+grid containerClass tableClass rowHeight extra debounceDelay dcols drows rowSelect mkRow = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (tbody, dcontrols, expE, expVisE, expSelE, colToggles, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
-        (expE, expVisE, expSelE, colToggles) <- gridMenu dcols
+  rec (gridResizeEvent, (tbody, ghead, gmenu, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
+        gmenu <- gridMenu dcols
 
-        (tbody, dcontrols, dsel) <- elClass "table" tableClass $ do
-          dcontrols <- gridHead dcs sortState
+        (tbody, ghead, dsel) <- elClass "table" tableClass $ do
+          ghead <- gridHead dcs sortState
           (tbody, dsel) <- gridBody dcs window dselected rowgroupAttrs mkRow
-          return (tbody, dcontrols, dsel)
+          return (tbody, ghead, dsel)
 
-        return (tbody, dcontrols, expE, expVisE, expSelE, colToggles, dsel)
+        return (tbody, ghead, gmenu, dsel)
 
       -- height and top scroll
       initHeightE <- performEvent $ mapElHeight tbody pb
@@ -238,9 +276,8 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounceShield (domEvent Scroll tbody)
 
-      -- split controls into filters and sort events
-      dfs <- return . joinDynThroughMap =<< mapDyn (Map.map fst) dcontrols
-      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) =<< mapDyn (Map.map snd) dcontrols
+      let dfs = joinDynThroughMap $ _gridHead_columnFilters ghead
+      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) (_gridHead_columnSorts ghead)
 
       -- TODO:
       -- if the old set of filteres is completely contained within the new we can keep existing work and
@@ -253,17 +290,17 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
       window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
       rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop =<< mapDyn Map.size dxs
 
-      dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap colToggles)
+      dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap $ _gridMenu_columnVisibility gmenu)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
 
       dselected <- mapDyn (leftmost . Map.elems) dsel
-        >>= foldDyn foldSelectMultiple Map.empty . switchPromptlyDyn
+        >>= foldDyn rowSelect Map.empty . switchPromptlyDyn
 
-  exportCsv dcols $ tag (current drows) expE
-  exportCsv dcols $ tag (current dxs) expVisE
-  exportCsv dcols $ tag (current dselected) expSelE
+  exportCsv dcols $ tag (current drows) $ _gridMenu_export gmenu
+  exportCsv dcols $ tag (current dxs) $ _gridMenu_exportVisible gmenu
+  exportCsv dcols $ tag (current dselected) $ _gridMenu_exportSelected gmenu
 
-  return (dcs, dxs, dselected)
+  return $ Grid dcols dcs drows dxs dselected never
 
   where
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
@@ -307,27 +344,24 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows mkRow =
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
 
---
--- TODO: one of those should probably be supplied by the caller to allow choice of single vs multiple selection
---
 
--- single row selection
-foldSelectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
-foldSelectSingle (k, v) sel =
+-- | Single row selection.
+selectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
+selectSingle (k, v) sel =
   case Map.lookup k sel of
     Just _ -> Map.empty
     Nothing -> Map.singleton k v
 
--- multipe row selection
-foldSelectMultiple :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
-foldSelectMultiple (k, v) sel =
+-- | Multipe row selection.
+selectMultiple :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
+selectMultiple (k, v) sel =
   case Map.lookup k sel of
     Just _ -> Map.delete k sel
     Nothing -> Map.insert k v sel
 
 toCsv :: Columns k v -> Rows k v -> String
 toCsv cols rows = printCSV $ toFields <$> Map.toList rows
-  where toFields (k, x) = fmap (\c -> colValue c k x) cs
+  where toFields (k, x) = fmap (\c -> _colValue c k x) cs
         cs = Map.elems cols
 
 exportCsv :: MonadWidget t m => Dynamic t (Columns k v) -> Event t (Rows k v) -> m ()
