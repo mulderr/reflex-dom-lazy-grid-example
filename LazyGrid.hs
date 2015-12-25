@@ -1,25 +1,6 @@
-{-# LANGUAGE RecursiveDo, ScopedTypeVariables, TemplateHaskell #-}
-module LazyGrid 
-  ( Rows
-  , Columns
-  , Column (..)
-  , Grid (..)
-
-  -- ^ Lenses
-  , colName
-  , colHeader
-  , colValue
-  , colCompare
-  , colFilter
-  , colVisible
-  , colAttrs
-
-  -- ^ Widgets
-  , grid
-
-  -- ^ Row selection strageties
-  , selectSingle
-  , selectMultiple
+{-# LANGUAGE RecursiveDo, ScopedTypeVariables, TemplateHaskell, TypeFamilies #-}
+module LazyGrid
+  ( module LazyGrid, def, (&), (.~)
   ) where
 
 import           Control.Lens ((^.), makeLenses)
@@ -31,6 +12,7 @@ import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Monoid ((<>))
 import           Data.Time.Clock (NominalDiffTime)
+import           Data.Traversable (forM)
 import           Text.CSV
 
 import           GHCJS.DOM.Element (getOffsetHeight)
@@ -48,16 +30,14 @@ type Filters k = Map k String
 
 -- | Grid column.
 data Column k v = Column
-  { _colName :: String                                     -- ^ column name
-  , _colHeader :: String                                   -- ^ column header
-  , _colValue :: (k, k) -> v -> String                     -- ^ column string value for display, can use row key and value
-  , _colCompare :: Maybe (v -> v -> Ordering)              -- ^ ordering function
-  , _colFilter :: Maybe (String -> Rows k v -> Rows k v)   -- ^ filtering function
-  , _colVisible :: Bool                                    -- ^ initial visibility
-  , _colAttrs :: Map String String                         -- ^ element attrs applied to <th> and available for use in row action
+  { _colName :: String -- ^ column name
+  , _colHeader :: String -- ^ column header
+  , _colValue :: (k, k) -> v -> String -- ^ column string value for display, can use row key and value
+  , _colCompare :: Maybe (v -> v -> Ordering) -- ^ ordering function
+  , _colFilter :: Maybe (String -> Rows k v -> Rows k v) -- ^ filtering function
+  , _colVisible :: Bool -- ^ initial visibility
+  , _colAttrs :: Map String String -- ^ element attrs applied to <th> and available for use in row action
   }
-
-makeLenses ''Column
 
 instance Eq (Column k v) where
   x == y = _colName x == _colName y
@@ -92,14 +72,49 @@ data GridOrdering k = GridOrdering k SortOrder
 instance Default k => Default (GridOrdering k) where
   def = GridOrdering def def
 
+data GridConfig t m k v
+   = GridConfig { _gridConfig_attributes :: Dynamic t (Map String String) -- ^ resizeDetector <div> attributes
+                , _gridConfig_tableAttributes :: Dynamic t (Map String String) -- ^ <table> attrs
+                , _gridConfig_rowHeight :: Int -- ^ row height in px
+                , _gridConfig_extraRows :: Int -- ^ extra rows rendered on top and bottom
+                , _gridConfig_debounce :: NominalDiffTime
+                , _gridConfig_columns :: Dynamic t (Columns k v)
+                , _gridConfig_rows :: Dynamic t (Rows k v)
+                , _gridConfig_selectionStrategy :: (((k, k), v) -> Rows k v -> Rows k v)
+                , _gridConfig_menuWidget :: (GridMenuConfig t k v -> m (GridMenu t k))
+                , _gridConfig_headWidget :: (GridHeadConfig t k v -> m (GridHead t k))
+                , _gridConfig_bodyWidget :: (GridBodyConfig t m k v -> m (GridBody t k v))
+                , _gridConfig_rowAction :: (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t))
+                }
+
+instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
+  def = GridConfig { _gridConfig_attributes = constDyn ("class" =: "grid-container")
+                   , _gridConfig_tableAttributes = constDyn ("class" =: "grid-table")
+                   , _gridConfig_rowHeight = 30
+                   , _gridConfig_extraRows = 1
+                   , _gridConfig_debounce = 0.01
+                   , _gridConfig_columns = constDyn mempty
+                   , _gridConfig_rows = constDyn mempty
+                   , _gridConfig_selectionStrategy = selectSingle
+                   , _gridConfig_menuWidget = gridMenuSimple
+                   , _gridConfig_headWidget = gridHeadSimple
+                   , _gridConfig_bodyWidget = gridBodySimple
+                   , _gridConfig_rowAction = defaultRowAction
+                   }
+
 data Grid t k v
    = Grid { _grid_columns :: Dynamic t (Columns k v)
           , _grid_columnsVisible :: Dynamic t (Columns k v)
           , _grid_rows :: Dynamic t (Rows k v)
           , _grid_rowsFiltered :: Dynamic t (Rows k v)
           , _grid_rowsSelected :: Dynamic t (Rows k v)
-          , _grid_select :: Event t ((k,k), v)
           }
+
+-- this is really just for consistency
+-- also I predict more stuff will be added here later so it will make more sense then
+data GridMenuConfig t k v
+   = GridMenuConfig { _gridMenuConfig_columns :: Dynamic t (Columns k v)
+                    }
 
 data GridMenu t k
    = GridMenu { _gridMenu_export :: Event t ()
@@ -108,14 +123,35 @@ data GridMenu t k
               , _gridMenu_columnVisibility :: Dynamic t (Map k (Dynamic t Bool))
               }
 
+data GridHeadConfig t k v
+   = GridHeadConfig { _gridHeadConfig_columns :: Dynamic t (Columns k v)
+                    , _gridHeadConfig_ordering :: Dynamic t (GridOrdering k)
+                    }
+
 data GridHead t k
    = GridHead { _gridHead_columnFilters :: Dynamic t (Map k (Dynamic t String))
               , _gridHead_columnSorts :: Dynamic t (Map k (Event t k))
               }
 
-makeLenses ''Grid
-makeLenses ''GridMenu
-makeLenses ''GridHead
+data GridBodyConfig t m k v
+   = GridBodyConfig { _gridBodyConfig_columns :: Dynamic t (Columns k v) -- ^ visible columns
+                    , _gridBodyConfig_rows :: Dynamic t (Rows k v)
+                    , _gridBodyConfig_window :: Dynamic t (Rows k v)
+                    , _gridBodyConfig_selectedRows :: Dynamic t (Rows k v)
+                    , _gridBodyConfig_containerAttrs :: Dynamic t (Map String String)
+                    , _gridBodyConfig_rowAction :: (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t))
+                    }
+
+data GridBody t k v
+   = GridBody { _gridBody_tbody :: El t
+              , _girdBody_rowSelectEvents :: Dynamic t (Map (k, k) (Event t ((k, k), v)))
+              }
+
+defaultRowAction :: (MonadWidget t m) => Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)
+defaultRowAction cs k v dsel = do
+  attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
+  (el, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
+  return el
 
 -- | Handles model changes in response to filtering or sorting.
 gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
@@ -153,11 +189,11 @@ gridSort cols (GridOrdering k sortOrder) xs =
         SortDesc -> return $ sortBy (flip f')
     reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
 
-
-gridMenu :: forall t m k v . (MonadWidget t m, Ord k)
-  => Dynamic t (Columns k v) -- ^ columns
+-- | Simple menu widget implementation.
+gridMenuSimple :: forall t m k v . (MonadWidget t m, Ord k)
+  => GridMenuConfig t k v
   -> m (GridMenu t k)
-gridMenu dcols = el "div" $ do
+gridMenuSimple (GridMenuConfig cols) = el "div" $ do
   (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
   menuOpen <- toggle False $ domEvent Click menuToggle
   menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
@@ -167,7 +203,7 @@ gridMenu dcols = el "div" $ do
       (exportEl, _) <- el' "li" $ text "Export all data as csv"
       (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
       (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
-      toggles <- listWithKey dcols $ \k dc ->
+      toggles <- listWithKey cols $ \k dc ->
         sample (current dc) >>= \c -> el "div" $ do
           rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ _colHeader c
               dt <- toggle (_colVisible c) (domEvent Click toggleEl)
@@ -179,16 +215,15 @@ gridMenu dcols = el "div" $ do
         (domEvent Click exportSelectedEl)
         toggles
 
-
-gridHead :: forall t m k v . (MonadWidget t m, Ord k)
-  => Dynamic t (Columns k v)      -- ^ columns
-  -> Dynamic t (GridOrdering k)   -- ^ ordering
+-- | Simple head widget implementation.
+gridHeadSimple :: forall t m k v . (MonadWidget t m, Ord k)
+  => GridHeadConfig t k v
   -> m (GridHead t k)
-gridHead dcs dordering = el "thead" $ el "tr" $ do
-  dcontrols <- listWithKey dcs $ \k dc -> sample (current dc) >>= \c -> elAttr "th" (_colAttrs c) $ do
+gridHeadSimple (GridHeadConfig cols ordering) = el "thead" $ el "tr" $ do
+  dcontrols <- listWithKey cols $ \k dc -> sample (current dc) >>= \c -> elAttr "th" (_colAttrs c) $ do
     -- header and sort controls
     let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (_colCompare c)
-    sortAttrs <- mapDyn (toSortIndicatorAttrs k) dordering
+    sortAttrs <- mapDyn (toSortIndicatorAttrs k) ordering
     (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
       text (_colHeader c)
       elDynAttr "span" sortAttrs $ return ()
@@ -220,55 +255,40 @@ gridHead dcs dordering = el "thead" $ el "tr" $ do
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
 
-
-gridBody :: forall t m k v . (MonadWidget t m, Ord k)
-  => Dynamic t (Columns k v)        -- ^ visible columns
-  -> Dynamic t (Rows k v)           -- ^ window
-  -> Dynamic t (Rows k v)           -- ^ selected rows
-  -> Dynamic t (Map String String)  -- ^ x-rowgroup attrs
-  -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
-  -> m
-     ( El t                                           -- ^ tbody element
-     , Dynamic t (Map (k, k) (Event t ((k, k), v)))   -- ^ row selection events
-     )
-gridBody dcs window dselected dattrs mkRow = el' "tbody" $
-  -- i am not sure it is legal to have a custom element directly under tbody
-  -- if not then what consequences does it have?
-  elDynAttr "x-rowgroup" dattrs $ do
-    dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
-        -- we want to sample the columns exactly once for all rows we render
-        cs <- sample $ current dcs
-        listWithKey window $ \k dv -> do
-          v <- sample $ current dv
-          r <- mkRow cs k v =<< mapDyn (isJust . Map.lookup k) dselected
-          return $ (k, v) <$ domEvent Click r
-      ) $ updated dcs
-    return $ joinDyn dsel
-
+-- | Simple body widget implementation.
+gridBodySimple :: forall t m k v . (MonadWidget t m, Ord k)
+  => GridBodyConfig t m k v
+  -> m (GridBody t k v)
+gridBodySimple (GridBodyConfig cols rows window selected attrs rowAction) = do
+  (tbody, ds) <- el' "tbody" $
+    -- i am not sure it is legal to have a custom element directly under tbody
+    -- if not then what consequences does it have?
+    elDynAttr "x-rowgroup" attrs $ do
+      -- widgetHold is (ab)used to trigger complete redraw if rows or columns change
+      dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
+          -- we want to sample the columns exactly once for all rows we render
+          cs <- sample $ current cols
+          listWithKey window $ \k dv -> do
+            v <- sample $ current dv
+            r <- rowAction cs k v =<< mapDyn (isJust . Map.lookup k) selected
+            return $ (k, v) <$ domEvent Click r
+        ) $ leftmost [fmap (const ()) $ updated cols, fmap (const ()) $ updated rows]
+      return $ joinDyn dsel
+  return $ GridBody tbody ds
 
 -- | Grid view.
-grid :: forall t m k v a . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
-  => String                                 -- ^ css class applied to <div> container
-  -> String                                 -- ^ css class applied to <table>
-  -> Int                                    -- ^ row height in px
-  -> Int                                    -- ^ extra rows rendered on top and bottom
-  -> NominalDiffTime                        -- ^ debounce delay, 0.01 seems reasonable
-  -> Dynamic t (Columns k v)                -- ^ columns
-  -> Dynamic t (Rows k v)                   -- ^ rows
-  -> (((k, k), v) -> Rows k v -> Rows k v)  -- ^ selection strategy
-  -> (Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)) -- ^ row creating action
+grid :: forall t m k v . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
+  => GridConfig t m k v
   -> m (Grid t k v)
-grid containerClass tableClass rowHeight extra debounceDelay dcols drows rowSelect mkRow = do
+grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (tbody, ghead, gmenu, dsel)) <- resizeDetectorAttr ("class" =: containerClass) $ do
-        gmenu <- gridMenu dcols
-
-        (tbody, ghead, dsel) <- elClass "table" tableClass $ do
-          ghead <- gridHead dcs sortState
-          (tbody, dsel) <- gridBody dcs window dselected rowgroupAttrs mkRow
-          return (tbody, ghead, dsel)
-
-        return (tbody, ghead, gmenu, dsel)
+  rec (gridResizeEvent, (gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
+        gmenu <- gridMenu $ GridMenuConfig cols
+        (ghead, gbody) <- elDynAttr "table" tableAttrs $ do
+          ghead <- gridHead $ GridHeadConfig cs sortState
+          gbody <- gridBody $ GridBodyConfig cs rows window selected rowgroupAttrs rowAction
+          return (ghead, gbody)
+        return (gmenu, ghead, gbody)
 
       -- height and top scroll
       initHeightE <- performEvent $ mapElHeight tbody pb
@@ -276,7 +296,7 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows rowSele
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounceShield (domEvent Scroll tbody)
 
-      let dfs = joinDynThroughMap $ _gridHead_columnFilters ghead
+      let fs = joinDynThroughMap $ _gridHead_columnFilters ghead
       sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) (_gridHead_columnSorts ghead)
 
       -- TODO:
@@ -284,30 +304,28 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows rowSele
       -- only search within current dxs
       --
       -- note we cannot avoid starting from scratch when we subtract something from any of the filters
-      gridState <- combineDyn4 (,,,) dcols drows dfs sortState
-      dxs <- gridManager $ updated gridState
+      gridState <- combineDyn4 (,,,) cols rows fs sortState
+      xs <- gridManager $ updated gridState
 
-      window <- combineDyn3 toWindow dxs scrollTop tbodyHeight
-      rowgroupAttrs <- combineDyn toRowgroupAttrs scrollTop =<< mapDyn Map.size dxs
+      window <- combineDyn3 toWindow xs scrollTop tbodyHeight
+      rowgroupAttrs <- mapDyn Map.size xs >>= combineDyn toRowgroupAttrs scrollTop
 
-      dcs <- mapDyn (Map.filter (== True)) (joinDynThroughMap $ _gridMenu_columnVisibility gmenu)
-        >>= combineDyn (Map.intersectionWith (\c _ -> c)) dcols
-
-      dselected <- mapDyn (leftmost . Map.elems) dsel
+      cs <- mapDyn (Map.filter (== True)) (joinDynThroughMap $ _gridMenu_columnVisibility gmenu)
+        >>= combineDyn (Map.intersectionWith (\c _ -> c)) cols
+      selected <- mapDyn (leftmost . Map.elems) sel
         >>= foldDyn rowSelect Map.empty . switchPromptlyDyn
 
-  exportCsv dcols $ tag (current drows) $ _gridMenu_export gmenu
-  exportCsv dcols $ tag (current dxs) $ _gridMenu_exportVisible gmenu
-  exportCsv dcols $ tag (current dselected) $ _gridMenu_exportSelected gmenu
-
-  return $ Grid dcols dcs drows dxs dselected never
+  exportCsv cols $ tag (current rows) $ _gridMenu_export gmenu
+  exportCsv cols $ tag (current xs) $ _gridMenu_exportVisible gmenu
+  exportCsv cols $ tag (current selected) $ _gridMenu_exportSelected gmenu
+  return $ Grid cols cs rows xs selected
 
   where
     toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
-
     mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
 
     -- if the delay is given to be 0 there is no point in calling debounce
+    debounceShield :: forall b . Event t b -> m (Event t b)
     debounceShield = case debounceDelay of
                        0 -> return
                        _ -> debounce debounceDelay
@@ -344,7 +362,6 @@ grid containerClass tableClass rowHeight extra debounceDelay dcols drows rowSele
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
 
-
 -- | Single row selection.
 selectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
 selectSingle (k, v) sel =
@@ -368,3 +385,17 @@ exportCsv :: MonadWidget t m => Dynamic t (Columns k v) -> Event t (Rows k v) ->
 exportCsv dcols e = do
   doc <- askDocument
   performEvent_ $ fmap (liftIO . triggerDownload doc "text/csv" "export.csv" . uncurry toCsv) $ attachDyn dcols e
+
+makeLenses ''Column
+makeLenses ''GridConfig
+makeLenses ''Grid
+makeLenses ''GridMenuConfig
+makeLenses ''GridMenu
+makeLenses ''GridHeadConfig
+makeLenses ''GridHead
+makeLenses ''GridBodyConfig
+makeLenses ''GridBody
+
+instance HasAttributes (GridConfig t m k v) where
+  type Attrs (GridConfig t m k v) = Dynamic t (Map String String)
+  attributes = gridConfig_attributes

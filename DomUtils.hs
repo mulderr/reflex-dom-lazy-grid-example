@@ -1,7 +1,7 @@
 {-# LANGUAGE RecursiveDo, ScopedTypeVariables #-}
 
 module DomUtils
-  ( resizeDetectorAttr
+  ( resizeDetectorDynAttr
   , textInputClearable
   , triggerDownload
   ) where
@@ -74,14 +74,14 @@ textInputClearable btnClass tic =
 -- more general version of resizeDetectorWithStyle
 -- need to specify class
 -- caller is responsible for somehow setting position: relative or position: absolute
-resizeDetectorAttr :: MonadWidget t m
-  => Map String String -- ^ Element attributes. Warning: It must specifiy the "position" attribute with value either "absolute" or "relative".
+resizeDetectorDynAttr :: MonadWidget t m
+  => Dynamic t (Map String String) -- ^ Element attributes. Warning: It must specifiy the "position" attribute with value either "absolute" or "relative".
   -> m a -- ^ The embedded widget
   -> m (Event t (), a) -- ^ An 'Event' that fires on resize, and the result of the embedded widget
-resizeDetectorAttr attrs w = do
+resizeDetectorDynAttr attrs w = do
   let childStyle = "position: absolute; left: 0; top: 0;"
       containerAttrs = "style" =: "position: absolute; left: 0; top: 0; right: 0; bottom: 0; overflow: scroll; z-index: -1; visibility: hidden;"
-  (parent, (expand, expandChild, shrink, w')) <- elAttr' "div" attrs $ do
+  (parent, (expand, expandChild, shrink, w')) <- elDynAttr' "div" attrs $ do
     w' <- w
     elAttr "div" containerAttrs $ do
       (expand, (expandChild, _)) <- elAttr' "div" containerAttrs $ elAttr' "div" ("style" =: childStyle) $ return ()

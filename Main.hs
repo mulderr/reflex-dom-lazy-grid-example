@@ -99,7 +99,6 @@ myDescription g = do
     el "p" $ do
       text "Known bugs:"
       el "ul" $ do
-        el "li" $ text "if you load a different dataset the view will not automatically reload (scroll away and back to recreate the rows)"
         el "li" $ text "arrow key scroll is broken, it locks when the currently visible rows go out of the DOM"
 
     el "p" $ do
@@ -129,16 +128,19 @@ myGridView defFile reloadE = do
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
 
-  g <- grid "my-grid" "table" 30 2 0.01 (constDyn columns) xs selectSingle $ \cs k v dsel -> do
-    attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
-    (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
-      case _colName c of
-        "employed" -> do let t = (_colValue c) k v
-                             attrs = (_colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
-                         elAttr "td" attrs $ text t
-        _ -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
-    return e
-
+  g <- grid $ def & attributes .~ constDyn ("class" =: "my-grid")
+                  & gridConfig_columns .~ constDyn columns
+                  & gridConfig_rows .~ xs
+                  -- we want to show off conditional formatting, normally it's fine to stick with the default
+                  & gridConfig_rowAction .~ \cs k v dsel -> do
+                      attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
+                      (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
+                        case _colName c of
+                          "employed" -> let t = (_colValue c) k v
+                                            attrs = (_colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
+                                        in elAttr "td" attrs $ text t
+                          _ -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
+                      return e
   return g
 
 
