@@ -91,7 +91,7 @@ instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
   def = GridConfig { _gridConfig_attributes = constDyn ("class" =: "grid-container")
                    , _gridConfig_tableAttributes = constDyn ("class" =: "grid-table")
                    , _gridConfig_rowHeight = 30
-                   , _gridConfig_extraRows = 1
+                   , _gridConfig_extraRows = 2
                    , _gridConfig_debounce = 0.01
                    , _gridConfig_columns = constDyn mempty
                    , _gridConfig_rows = constDyn mempty

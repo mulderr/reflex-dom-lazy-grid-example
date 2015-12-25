@@ -64,11 +64,13 @@ myDescription g = do
     e <- el "p" $ do
       text "Grab some data (also courtesy of ui-grid):"
       el "ul" $ do
-        (e1, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "500 rows"
-        (e2, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "10k rows"
+        (e1, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "50 rows"
+        (e2, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "500 rows"
+        (e3, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "10k rows"
         return $ leftmost
-          [ "500.json" <$ domEvent Click e1
-          , "10000.json" <$ domEvent Click e2
+          [ "50.json" <$ domEvent Click e1
+          , "500.json" <$ domEvent Click e2
+          , "10000.json" <$ domEvent Click e3
           ]
 
     el "p" $ do
