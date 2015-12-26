@@ -135,13 +135,13 @@ myGridView defFile reloadE = do
                   & gridConfig_rows .~ xs
                   -- we want to show off conditional formatting, normally it's fine to stick with the default
                   & gridConfig_rowAction .~ \cs k v dsel -> do
-                      attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
-                      (e, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> do
-                        case _colName c of
-                          "employed" -> let t = (_colValue c) k v
-                                            attrs = (_colAttrs c) <> (if t == "0" then "class" =: "red" else Map.empty)
-                                        in elAttr "td" attrs $ text t
-                          _ -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
+                      attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
+                      (e, _) <- elDynAttr' "tr" attrs $ forM cs $ \c ->
+                        let t = (_colValue c) k v
+                            attrs = _colAttrs c <> case _colName c of
+                                                     "employed" -> if t == "0" then "class" =: "red" else mempty
+                                                     _ -> mempty
+                        in elAttr "td" attrs $ text t
                       return e
   return g
 

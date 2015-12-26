@@ -36,22 +36,21 @@ data Column k v = Column
   , _colCompare :: Maybe (v -> v -> Ordering) -- ^ ordering function
   , _colFilter :: Maybe (String -> Rows k v -> Rows k v) -- ^ filtering function
   , _colVisible :: Bool -- ^ initial visibility
-  , _colAttrs :: Map String String -- ^ element attrs applied to <th> and available for use in row action
+  , _colAttrs :: Map String String -- ^ attrs applied to <th> and available for use in row action
   }
 
 instance Eq (Column k v) where
   x == y = _colName x == _colName y
 
 instance Default (Column k v) where
-  def = Column
-    { _colName = ""
-    , _colHeader = ""
-    , _colValue = (\_ _ -> "")
-    , _colCompare = Nothing
-    , _colFilter = Nothing
-    , _colVisible = True
-    , _colAttrs = Map.empty
-    }
+  def = Column { _colName = ""
+               , _colHeader = ""
+               , _colValue = (\_ _ -> "")
+               , _colCompare = Nothing
+               , _colFilter = Nothing
+               , _colVisible = True
+               , _colAttrs = mempty
+               }
 
 -- | Column ordering.
 data SortOrder
@@ -99,7 +98,7 @@ instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
                    , _gridConfig_menuWidget = gridMenuSimple
                    , _gridConfig_headWidget = gridHeadSimple
                    , _gridConfig_bodyWidget = gridBodySimple
-                   , _gridConfig_rowAction = defaultRowAction
+                   , _gridConfig_rowAction = gridRowSimple
                    }
 
 data Grid t k v
@@ -110,8 +109,6 @@ data Grid t k v
           , _grid_rowsSelected :: Dynamic t (Rows k v)
           }
 
--- this is really just for consistency
--- also I predict more stuff will be added here later so it will make more sense then
 data GridMenuConfig t k v
    = GridMenuConfig { _gridMenuConfig_columns :: Dynamic t (Columns k v)
                     }
@@ -147,25 +144,17 @@ data GridBody t k v
               , _girdBody_rowSelectEvents :: Dynamic t (Map (k, k) (Event t ((k, k), v)))
               }
 
-defaultRowAction :: (MonadWidget t m) => Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)
-defaultRowAction cs k v dsel = do
-  attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else Map.empty
-  (el, _) <- elDynAttr' "tr" attrs $ forM (Map.toList cs) $ \(ck, c) -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
-  return el
-
 -- | Handles model changes in response to filtering or sorting.
-gridManager :: (MonadWidget t m, Ord k, Enum k, Num k)
+gridManager :: (MonadWidget t m, Ord k, Enum k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
   -> m (Dynamic t (Rows k v))
-gridManager =
-  holdDyn Map.empty . fmap f
+gridManager = holdDyn mempty . fmap f
   where
     f (cols, rows, fs, order) = gridSort cols order $ gridFilter cols fs rows
 
 -- | Apply filters to a set of rows.
 gridFilter :: Ord k => Columns k v -> Filters k -> Rows k v -> Rows k v
-gridFilter cols fs xs =
-  Map.foldrWithKey (applyOne cols) xs fs
+gridFilter cols fs xs = Map.foldrWithKey (applyOne cols) xs fs
   where
     applyOne _ _ "" xs = xs
     applyOne cols k s xs = case Map.lookup k cols of
@@ -175,7 +164,7 @@ gridFilter cols fs xs =
                                          Nothing -> xs
 
 -- | Apply column sorting to a set of rows.
-gridSort :: (Num k, Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
+gridSort :: (Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
 gridSort cols (GridOrdering k sortOrder) xs =
   case (maybeSortFunc k cols) of
     Nothing -> xs
@@ -187,67 +176,54 @@ gridSort cols (GridOrdering k sortOrder) xs =
         SortNone -> Nothing
         SortAsc -> return $ sortBy f'
         SortDesc -> return $ sortBy (flip f')
-    reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [1..]
+    reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [(toEnum 1)..]
 
--- | Simple menu widget implementation.
-gridMenuSimple :: forall t m k v . (MonadWidget t m, Ord k)
-  => GridMenuConfig t k v
-  -> m (GridMenu t k)
+-- | Default menu widget implementation.
+gridMenuSimple :: (MonadWidget t m, Ord k) => GridMenuConfig t k v -> m (GridMenu t k)
 gridMenuSimple (GridMenuConfig cols) = el "div" $ do
   (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
   menuOpen <- toggle False $ domEvent Click menuToggle
-  menuAttrs <- mapDyn (\o -> "class" =: if o then "grid-menu grid-menu-open" else "grid-menu") menuOpen
+  menuAttrs <- mapDyn (\o -> "class" =: ("grid-menu" <> if o then " grid-menu-open" else "")) menuOpen
+  elDynAttr "div" menuAttrs $ elClass "ul" "grid-menu-list" $ do
+    (exportEl, _) <- el' "li" $ text "Export all data as csv"
+    (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
+    (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
+    toggles <- listWithKey cols $ \k dc ->
+      sample (current dc) >>= \c -> el "div" $ do
+        rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ _colHeader c
+            dt <- toggle (_colVisible c) (domEvent Click toggleEl)
+            attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
+        return dt
+    return $ GridMenu
+      (domEvent Click exportEl)
+      (domEvent Click exportVisibleEl)
+      (domEvent Click exportSelectedEl)
+      toggles
 
-  elDynAttr "div" menuAttrs $ do
-    elClass "ul" "grid-menu-list" $ do
-      (exportEl, _) <- el' "li" $ text "Export all data as csv"
-      (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
-      (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
-      toggles <- listWithKey cols $ \k dc ->
-        sample (current dc) >>= \c -> el "div" $ do
-          rec (toggleEl, _) <- elDynAttr' "li" attrs $ text $ _colHeader c
-              dt <- toggle (_colVisible c) (domEvent Click toggleEl)
-              attrs <- mapDyn (\v -> ("class" =: ("grid-menu-col " <> if v then "grid-menu-col-visible" else "grid-menu-col-hidden"))) dt
-          return dt
-      return $ GridMenu
-        (domEvent Click exportEl)
-        (domEvent Click exportVisibleEl)
-        (domEvent Click exportSelectedEl)
-        toggles
-
--- | Simple head widget implementation.
-gridHeadSimple :: forall t m k v . (MonadWidget t m, Ord k)
-  => GridHeadConfig t k v
-  -> m (GridHead t k)
+-- | Default head widget implementation.
+gridHeadSimple :: (MonadWidget t m, Ord k) => GridHeadConfig t k v -> m (GridHead t k)
 gridHeadSimple (GridHeadConfig cols ordering) = el "thead" $ el "tr" $ do
-  dcontrols <- listWithKey cols $ \k dc -> sample (current dc) >>= \c -> elAttr "th" (_colAttrs c) $ do
+  controls <- listWithKey cols $ \k dc -> sample (current dc) >>= \c -> elAttr "th" (_colAttrs c) $ do
     -- header and sort controls
-    let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") (_colCompare c)
+    let headerClass = maybe "grid-col-title" (const "grid-col-title grid-col-title-sort") $ _colCompare c
     sortAttrs <- mapDyn (toSortIndicatorAttrs k) ordering
     (sortEl, _) <- elAttr' "div" ("class" =: headerClass) $ do
-      text (_colHeader c)
+      text $ _colHeader c
       elDynAttr "span" sortAttrs $ return ()
-
-    let sortEvent = case _colCompare c of
-                      Just _ -> tag (constant k) $ domEvent Click sortEl
-                      Nothing -> never
-
+    let sortEvent = maybe never (const $ tag (constant k) $ domEvent Click sortEl) $ _colCompare c
     -- filter controls
-    dfilter <- case _colFilter c of
+    filter <- case _colFilter c of
       Just f -> do
         ti <- textInputClearable "grid-col-filter-clear-btn" (def & attributes .~ constDyn ("class" =: "grid-col-filter" ))
         return $ _textInput_value ti
-      Nothing -> return $ constDyn $ ""
-
-    return (dfilter, sortEvent)
-  
-  dfilters <- mapDyn (Map.map fst) dcontrols
-  dsorts <- mapDyn (Map.map snd) dcontrols
-  return $ GridHead dfilters dsorts
-
+      Nothing -> return $ constDyn ""
+    return (filter, sortEvent)
+  filters <- mapDyn (fmap fst) controls
+  sortEvents <- mapDyn (fmap snd) controls
+  return $ GridHead filters sortEvents
   where
     -- given column key k and GridOrdering k return sort indicator attrs for that column
-    toSortIndicatorAttrs :: k -> GridOrdering k -> Map String String
+    toSortIndicatorAttrs :: (Eq k) => k -> GridOrdering k -> Map String String
     toSortIndicatorAttrs k (GridOrdering ck v) = "class" =: ("grid-col-sort-icon" <> if ck == k
       then case v of
              SortNone -> ""
@@ -255,31 +231,31 @@ gridHeadSimple (GridHeadConfig cols ordering) = el "thead" $ el "tr" $ do
              SortDesc -> " grid-col-sort-icon-desc"
       else "")
 
--- | Simple body widget implementation.
-gridBodySimple :: forall t m k v . (MonadWidget t m, Ord k)
-  => GridBodyConfig t m k v
-  -> m (GridBody t k v)
+-- | Default body widget implementation.
+gridBodySimple :: (MonadWidget t m, Ord k) => GridBodyConfig t m k v -> m (GridBody t k v)
 gridBodySimple (GridBodyConfig cols rows window selected attrs rowAction) = do
-  (tbody, ds) <- el' "tbody" $
-    -- i am not sure it is legal to have a custom element directly under tbody
-    -- if not then what consequences does it have?
-    elDynAttr "x-rowgroup" attrs $ do
-      -- widgetHold is (ab)used to trigger complete redraw if rows or columns change
-      dsel <- widgetHold (return $ constDyn Map.empty) $ fmap (const $ do
-          -- we want to sample the columns exactly once for all rows we render
-          cs <- sample $ current cols
-          listWithKey window $ \k dv -> do
-            v <- sample $ current dv
-            r <- rowAction cs k v =<< mapDyn (isJust . Map.lookup k) selected
-            return $ (k, v) <$ domEvent Click r
-        ) $ leftmost [fmap (const ()) $ updated cols, fmap (const ()) $ updated rows]
-      return $ joinDyn dsel
-  return $ GridBody tbody ds
+  (tbody, sel) <- el' "tbody" $ elDynAttr "x-rowgroup" attrs $ do
+    -- widgetHold is (ab)used to trigger complete redraw if rows or columns change
+    sel <- widgetHold (return $ constDyn mempty) $ fmap (const $ do
+      -- we want to sample the columns exactly once for all rows we render
+      cs <- sample $ current cols
+      listWithKey window $ \k dv -> do
+        v <- sample $ current dv
+        r <- rowAction cs k v =<< mapDyn (isJust . Map.lookup k) selected
+        return $ (k, v) <$ domEvent Click r
+      ) $ leftmost [fmap (const ()) $ updated cols, fmap (const ()) $ updated rows]
+    return $ joinDyn sel
+  return $ GridBody tbody sel
+
+-- | Default row action.
+gridRowSimple :: (MonadWidget t m) => Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)
+gridRowSimple cs k v dsel = do
+  attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
+  (el, _) <- elDynAttr' "tr" attrs $ forM cs $ \c -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
+  return el
 
 -- | Grid view.
-grid :: forall t m k v . (MonadWidget t m, Ord k, Default k, Enum k, Num k)
-  => GridConfig t m k v
-  -> m (Grid t k v)
+grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConfig t m k v -> m (Grid t k v)
 grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
   rec (gridResizeEvent, (gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
@@ -313,7 +289,7 @@ grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSel
       cs <- mapDyn (Map.filter (== True)) (joinDynThroughMap $ _gridMenu_columnVisibility gmenu)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) cols
       selected <- mapDyn (leftmost . Map.elems) sel
-        >>= foldDyn rowSelect Map.empty . switchPromptlyDyn
+        >>= foldDyn rowSelect mempty . switchPromptlyDyn
 
   exportCsv cols $ tag (current rows) $ _gridMenu_export gmenu
   exportCsv cols $ tag (current xs) $ _gridMenu_exportVisible gmenu
@@ -364,17 +340,11 @@ grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSel
 
 -- | Single row selection.
 selectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
-selectSingle (k, v) sel =
-  case Map.lookup k sel of
-    Just _ -> Map.empty
-    Nothing -> Map.singleton k v
+selectSingle (k, v) sel = maybe (Map.singleton k v) (const mempty) $ Map.lookup k sel
 
--- | Multipe row selection.
+-- | Multiple row selection.
 selectMultiple :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
-selectMultiple (k, v) sel =
-  case Map.lookup k sel of
-    Just _ -> Map.delete k sel
-    Nothing -> Map.insert k v sel
+selectMultiple (k, v) sel = maybe (Map.insert k v sel) (const $ Map.delete k sel) $ Map.lookup k sel
 
 toCsv :: Columns k v -> Rows k v -> String
 toCsv cols rows = printCSV $ toFields <$> Map.toList rows
