@@ -141,7 +141,7 @@ data GridBodyConfig t m k v
 
 data GridBody t k v
    = GridBody { _gridBody_tbody :: El t
-              , _girdBody_rowSelectEvents :: Dynamic t (Map (k, k) (Event t ((k, k), v)))
+              , _gridBody_rowSelectEvents :: Dynamic t (Map (k, k) (Event t ((k, k), v)))
               }
 
 -- | Handles model changes in response to filtering or sorting.
@@ -234,7 +234,7 @@ gridHeadSimple (GridHeadConfig cols ordering) = el "thead" $ el "tr" $ do
 -- | Default body widget implementation.
 gridBodySimple :: (MonadWidget t m, Ord k) => GridBodyConfig t m k v -> m (GridBody t k v)
 gridBodySimple (GridBodyConfig cols rows window selected attrs rowAction) = do
-  (tbody, sel) <- el' "tbody" $ elDynAttr "x-rowgroup" attrs $ do
+  (tbody, sel) <- elAttr' "tbody" ("tabindex" =: "0") $ elDynAttr "x-rowgroup" attrs $ do
     -- widgetHold is (ab)used to trigger complete redraw if rows or columns change
     sel <- widgetHold (return $ constDyn mempty) $ fmap (const $ do
       -- we want to sample the columns exactly once for all rows we render
@@ -258,13 +258,13 @@ gridRowSimple cs k v dsel = do
 grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConfig t m k v -> m (Grid t k v)
 grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
-  rec (gridResizeEvent, (gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
+  rec (gridResizeEvent, (table, gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
         gmenu <- gridMenu $ GridMenuConfig cols
-        (ghead, gbody) <- elDynAttr "table" tableAttrs $ do
+        (table, (ghead, gbody)) <- elDynAttr' "table" tableAttrs $ do
           ghead <- gridHead $ GridHeadConfig cs sortState
           gbody <- gridBody $ GridBodyConfig cs rows window selected rowgroupAttrs rowAction
           return (ghead, gbody)
-        return (gmenu, ghead, gbody)
+        return (table, gmenu, ghead, gbody)
 
       -- height and top scroll
       initHeightE <- performEvent $ mapElHeight tbody pb

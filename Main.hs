@@ -49,10 +49,9 @@ myDescription g = do
     el "p" $ do
       text "Features:"
       el "ul" $ forM
-        [ "allows (almost) semantic markup, a non standard <x-rowgroup> tag is used for positioning of visible rows; "
-          <> "we could also absolutely position each row separately but that would be more DOM manipulations on scroll"
-        , "sorting"
-        , "filtering"
+        [ "allows semantic markup, although by default a non standard <x-rowgroup> tag is used for positioning of visible rows (for perfomance)"
+        , "single column sorting"
+        , "multiple column filtering"
         , "column selection"
         , "fixed width columns through custom column attrs"
         , "conditional formatting using the row creating action"
@@ -97,11 +96,6 @@ myDescription g = do
       el "ul" $ listWithKey (_grid_rowsSelected g) $ \k dv -> do
         v <- sample $ current dv
         el "li" $ text $ show v
-
-    el "p" $ do
-      text "Known bugs:"
-      el "ul" $ do
-        el "li" $ text "arrow key scroll is broken, it locks when the currently visible rows go out of the DOM"
 
     el "p" $ do
       text "More:"
