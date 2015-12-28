@@ -111,6 +111,9 @@ data Grid t k v
 
 data GridMenuConfig t k v
    = GridMenuConfig { _gridMenuConfig_columns :: Dynamic t (Columns k v)
+                    , _gridMenuConfig_rows :: Dynamic t (Rows k v)
+                    , _gridMenuConfig_rowsFiltered :: Dynamic t (Rows k v)
+                    , _gridMenuConfig_rowsSelected :: Dynamic t (Rows k v)
                     }
 
 data GridMenu t k
@@ -180,11 +183,11 @@ gridSort cols (GridOrdering k sortOrder) xs =
 
 -- | Default menu widget implementation.
 gridMenuSimple :: (MonadWidget t m, Ord k) => GridMenuConfig t k v -> m (GridMenu t k)
-gridMenuSimple (GridMenuConfig cols) = el "div" $ do
+gridMenuSimple (GridMenuConfig cols rows filtered selected) = el "div" $ do
   (menuToggle, _) <- elAttr' "div" ("class" =: "grid-menu-toggle") $ return ()
   menuOpen <- toggle False $ domEvent Click menuToggle
   menuAttrs <- mapDyn (\o -> "class" =: ("grid-menu" <> if o then " grid-menu-open" else "")) menuOpen
-  elDynAttr "div" menuAttrs $ elClass "ul" "grid-menu-list" $ do
+  gm <- elDynAttr "div" menuAttrs $ elClass "ul" "grid-menu-list" $ do
     (exportEl, _) <- el' "li" $ text "Export all data as csv"
     (exportVisibleEl, _) <- el' "li" $ text "Export visible data as csv"
     (exportSelectedEl, _) <- el' "li" $ text "Export selected data as csv"
@@ -199,6 +202,10 @@ gridMenuSimple (GridMenuConfig cols) = el "div" $ do
       (domEvent Click exportVisibleEl)
       (domEvent Click exportSelectedEl)
       toggles
+  exportCsv cols $ tag (current rows) $ _gridMenu_export gm
+  exportCsv cols $ tag (current filtered) $ _gridMenu_exportVisible gm
+  exportCsv cols $ tag (current selected) $ _gridMenu_exportSelected gm
+  return gm
 
 -- | Default head widget implementation.
 gridHeadSimple :: (MonadWidget t m, Ord k) => GridHeadConfig t k v -> m (GridHead t k)
@@ -259,7 +266,7 @@ grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConf
 grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
   rec (gridResizeEvent, (table, gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
-        gmenu <- gridMenu $ GridMenuConfig cols
+        gmenu <- gridMenu $ GridMenuConfig cols rows xs selected
         (table, (ghead, gbody)) <- elDynAttr' "table" tableAttrs $ do
           ghead <- gridHead $ GridHeadConfig cs sortState
           gbody <- gridBody $ GridBodyConfig cs rows window selected rowgroupAttrs rowAction
@@ -291,9 +298,6 @@ grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSel
       selected <- mapDyn (leftmost . Map.elems) sel
         >>= foldDyn rowSelect mempty . switchPromptlyDyn
 
-  exportCsv cols $ tag (current rows) $ _gridMenu_export gmenu
-  exportCsv cols $ tag (current xs) $ _gridMenu_exportVisible gmenu
-  exportCsv cols $ tag (current selected) $ _gridMenu_exportSelected gmenu
   return $ Grid cols cs rows xs selected
 
   where

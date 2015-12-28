@@ -124,21 +124,19 @@ myGridView defFile reloadE = do
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
 
-  g <- grid $ def & attributes .~ constDyn ("class" =: "my-grid")
-                  & gridConfig_columns .~ constDyn columns
-                  & gridConfig_rows .~ xs
-                  -- we want to show off conditional formatting, normally it's fine to stick with the default
-                  & gridConfig_rowAction .~ \cs k v dsel -> do
-                      attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
-                      (e, _) <- elDynAttr' "tr" attrs $ forM cs $ \c ->
-                        let t = (_colValue c) k v
-                            attrs = _colAttrs c <> case _colName c of
-                                                     "employed" -> if t == "0" then "class" =: "red" else mempty
-                                                     _ -> mempty
-                        in elAttr "td" attrs $ text t
-                      return e
-  return g
-
+  grid $ def & attributes .~ constDyn ("class" =: "my-grid")
+             & gridConfig_columns .~ constDyn columns
+             & gridConfig_rows .~ xs
+             -- we want to show off conditional formatting, normally it's fine to stick with the default
+             & gridConfig_rowAction .~ \cs k v dsel -> do
+                attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
+                (e, _) <- elDynAttr' "tr" attrs $ forM cs $ \c ->
+                  let t = (_colValue c) k v
+                      attrs = _colAttrs c <> case _colName c of
+                                               "employed" -> if t == "0" then "class" =: "red" else mempty
+                                               _ -> mempty
+                  in elAttr "td" attrs $ text t
+                return e
 
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
