@@ -12,7 +12,7 @@ import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Monoid ((<>))
 import           Data.Time.Clock (NominalDiffTime)
-import           Data.Traversable (forM)
+import           Data.Foldable (forM_)
 import           Text.CSV
 
 import           GHCJS.DOM.Element (getOffsetHeight)
@@ -92,7 +92,7 @@ instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
                    , _gridConfig_tableTag = "table"
                    , _gridConfig_tableAttributes = constDyn ("class" =: "grid-table")
                    , _gridConfig_rowHeight = 30
-                   , _gridConfig_extraRows = 2
+                   , _gridConfig_extraRows = 10
                    , _gridConfig_debounce = 0.01
                    , _gridConfig_columns = constDyn mempty
                    , _gridConfig_rows = constDyn mempty
@@ -149,7 +149,14 @@ data GridBody t k v
               , _gridBody_rowSelectEvents :: Dynamic t (Map (k, k) (Event t ((k, k), v)))
               }
 
--- | Handles model changes in response to filtering or sorting.
+data GridWindow t k v
+   = GridWindow { _gridWindow_firstIndex :: Dynamic t Int
+                , _gridWindow_windowSize :: Dynamic t Int
+                , _gridWindow_window :: Dynamic t (Rows k v)
+                , _gridWindow_attributes :: Dynamic t (Map String String)
+                }
+
+-- | Handles model changes in response to filtering and sorting.
 gridManager :: (MonadWidget t m, Ord k, Enum k)
   => Event t (Columns k v, Rows k v, Filters k, GridOrdering k)
   -> m (Dynamic t (Rows k v))
@@ -182,6 +189,55 @@ gridSort cols (GridOrdering k sortOrder) xs =
         SortAsc -> return $ sortBy f'
         SortDesc -> return $ sortBy (flip f')
     reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [(toEnum 1)..]
+
+-- | Keeps the window updated based on scroll position and body height.
+gridWindowManager :: forall t m k v . (MonadWidget t m, Ord k)
+                  => Int -- ^ row height in px
+                  -> Int -- ^ extra row count
+                  -> Dynamic t Int -- ^ body height
+                  -> Dynamic t Int -- ^ scroll position
+                  -> Dynamic t (Rows k v)
+                  -> m (GridWindow t k v)
+gridWindowManager rowHeight extra height scrollTop xs = do
+  firstIndex <- (return . nubDyn) =<< foldDyn toFirstIdx 0 (updated scrollTop)
+  windowSize <- (return . nubDyn) =<< mapDyn toWindowSize height
+  window <- combineDyn3 toWindow firstIndex windowSize xs
+  attrs <- combineDyn toWindowAttrs firstIndex =<< mapDyn Map.size xs
+  return $ GridWindow firstIndex windowSize window attrs
+  where
+    -- first index parity must be stable not to have the zebra "flip" when using css :nth-child
+    toFirstIdx :: Int -> Int -> Int
+    toFirstIdx scrollTop prev =
+      let x = scrollTop `div` rowHeight - extra
+          x' = if odd x then x - 1 else x
+      in if abs (x' - prev) >= extra then x' else prev
+
+    toWindowSize :: Int -> Int
+    toWindowSize height =
+      height `div` rowHeight + 1 + 2*extra
+
+    toWindow :: Int -> Int -> Rows k v -> Rows k v
+    toWindow firstIdx wsize =
+      Map.fromList . take wsize . drop firstIdx . Map.toList
+
+    -- the position of the window is given by two css properties:
+    -- - top    - offset from the top
+    -- - height - includes content height and offset from the bottom
+    -- the main invariant being:
+    --   rowCount * rowHeight = top + height
+    -- rowCount * rowHeight = top + height
+    toWindowAttrs :: Int -> Int -> Map String String
+    toWindowAttrs firstIdx rowCount =
+      let total = rowCount * rowHeight
+          woffset = cutAtZero $ firstIdx * rowHeight
+          wheight = total - woffset
+          cutAtZero x = if x < 0 then 0 else x
+      in toStyleAttr $ "position" =: "relative"
+                    <> "overflow" =: "hidden"
+                    <> "top"      =: (show woffset <> "px")
+                    <> "height"   =: (show wheight <> "px")
+      where
+        toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
 
 -- | Default menu widget implementation.
 gridMenuSimple :: (MonadWidget t m, Ord k) => GridMenuConfig t k v -> m (GridMenu t k)
@@ -252,19 +308,20 @@ gridBodySimple (GridBodyConfig cols rows window selected attrs rowAction) = do
         v <- sample $ current dv
         r <- rowAction cs k v =<< mapDyn (isJust . Map.lookup k) selected
         return $ (k, v) <$ domEvent Click r
-      ) $ leftmost [fmap (const ()) $ updated cols, fmap (const ()) $ updated rows]
+      ) $ leftmost [changed cols, changed rows]
     return $ joinDyn sel
   return $ GridBody tbody sel
+  where changed = fmap (const ()) . updated
 
 -- | Default row action.
 gridRowSimple :: (MonadWidget t m) => Columns k v -> (k, k) -> v -> Dynamic t Bool -> m (El t)
 gridRowSimple cs k v dsel = do
   attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
-  (el, _) <- elDynAttr' "tr" attrs $ forM cs $ \c -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
+  (el, _) <- elDynAttr' "tr" attrs $ forM_ cs $ \c -> elAttr "td" (_colAttrs c) $ text ((_colValue c) k v)
   return el
 
 -- | Grid view.
-grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConfig t m k v -> m (Grid t k v)
+grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k, Show k, Show v) => GridConfig t m k v -> m (Grid t k v)
 grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
   rec (gridResizeEvent, (table, gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
@@ -275,25 +332,22 @@ grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols ro
           return (ghead, gbody)
         return (table, gmenu, ghead, gbody)
 
-      -- height and top scroll
-      initHeightE <- performEvent $ mapElHeight tbody pb
-      resizeE <- performEvent . mapElHeight tbody =<< debounceShield gridResizeEvent
+      -- TODO:
+      -- if the old set of filteres is completely contained within the new we can keep existing work and
+      -- only search within current xs
+      --
+      -- note we cannot avoid starting from scratch when we subtract something from any of the filters
+      let filters = joinDynThroughMap $ _gridHead_columnFilters ghead
+      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) (_gridHead_columnSorts ghead)
+      gridState <- combineDyn4 (,,,) cols rows filters sortState
+      xs <- gridManager $ updated gridState
+
+      initHeightE <- performEvent $ fmap (toElHeight tbody) pb
+      resizeE <- performEvent . fmap (toElHeight tbody) =<< debounceShield gridResizeEvent
       tbodyHeight <- holdDyn 0 $ fmap ceiling $ leftmost [resizeE, initHeightE]
       scrollTop <- holdDyn 0 =<< debounceShield (domEvent Scroll tbody)
 
-      let fs = joinDynThroughMap $ _gridHead_columnFilters ghead
-      sortState <- toSortState . switchPromptlyDyn =<< mapDyn (leftmost . Map.elems) (_gridHead_columnSorts ghead)
-
-      -- TODO:
-      -- if the old set of filteres is completely contained within the new we can keep existing work and
-      -- only search within current dxs
-      --
-      -- note we cannot avoid starting from scratch when we subtract something from any of the filters
-      gridState <- combineDyn4 (,,,) cols rows fs sortState
-      xs <- gridManager $ updated gridState
-
-      window <- combineDyn3 toWindow xs scrollTop tbodyHeight
-      rowgroupAttrs <- mapDyn Map.size xs >>= combineDyn toRowgroupAttrs scrollTop
+      GridWindow _ _ window rowgroupAttrs <- gridWindowManager rowHeight extra tbodyHeight scrollTop xs
 
       cs <- mapDyn (Map.filter (== True)) (joinDynThroughMap $ _gridMenu_columnVisibility gmenu)
         >>= combineDyn (Map.intersectionWith (\c _ -> c)) cols
@@ -303,41 +357,13 @@ grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols ro
   return $ Grid cols cs rows xs selected
 
   where
-    toStyleAttr m = "style" =: (Map.foldrWithKey (\k v s -> k <> ":" <> v <> ";" <> s) "" m)
-    mapElHeight el = fmap (const $ liftIO $ getOffsetHeight $ _el_element el)
+    toElHeight el = const $ getOffsetHeight $ _el_element el
 
     -- if the delay is given to be 0 there is no point in calling debounce
     debounceShield :: forall b . Event t b -> m (Event t b)
     debounceShield = case debounceDelay of
                        0 -> return
                        _ -> debounce debounceDelay
-
-    -- always start the window with odd row not to have the zebra "flip" when using css :nth-child
-    toWindow :: Rows k v -> Int -> Int -> Rows k v
-    toWindow xs scrollTop tbodyHeight =
-      let d = scrollTop `div` rowHeight - extra
-          x = fromEnum $ odd d
-          skip = d - x
-          wsize = tbodyHeight `div` rowHeight + 1 + x + 2*extra
-      in Map.fromList . take wsize . drop skip . Map.toList $ xs
-
-    -- the position of the rowgroup is given by two css properties:
-    -- - top    - offset from the top
-    -- - height - includes content height and offset from the bottom
-    -- the main invariant being:
-    --   rowCount * rowHeight = top + height
-    toRowgroupAttrs :: Int -> Int -> Map String String
-    toRowgroupAttrs scrollTop rowCount = 
-      let total = rowCount * rowHeight
-          (d, pad) = scrollTop `divMod` rowHeight
-          x = fromEnum $ odd d
-          woffset = capAtZero $ scrollTop - pad - (extra + x) * rowHeight
-          wheight = total - woffset
-          capAtZero x = if x < 0 then 0 else x
-      in toStyleAttr $ "position" =: "relative"
-                    <> "overflow" =: "hidden"
-                    <> "top"      =: (show woffset <> "px")
-                    <> "height"   =: (show wheight <> "px")
 
     -- whenever we switch to another column SortOrder is reset to SortAsc
     toSortState :: Event t k -> m (Dynamic t (GridOrdering k))

@@ -92,7 +92,7 @@ myDescription g = do
           dynText =<< mapDyn (show . Map.size) (_grid_rowsSelected g)
 
     el "p" $ do
-      text "Selected rows:"
+      text "Selected row:"
       el "ul" $ listWithKey (_grid_rowsSelected g) $ \k dv -> do
         v <- sample $ current dv
         el "li" $ text $ show v
@@ -127,6 +127,7 @@ myGridView defFile reloadE = do
   grid $ def & attributes .~ constDyn ("class" =: "my-grid")
              & gridConfig_columns .~ constDyn columns
              & gridConfig_rows .~ xs
+             & gridConfig_selectionStrategy .~ selectSingle
              -- we want to show off conditional formatting, normally it's fine to stick with the default
              & gridConfig_rowAction .~ \cs k v dsel -> do
                 attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
