@@ -73,7 +73,8 @@ instance Default k => Default (GridOrdering k) where
 
 data GridConfig t m k v
    = GridConfig { _gridConfig_attributes :: Dynamic t (Map String String) -- ^ resizeDetector <div> attributes
-                , _gridConfig_tableAttributes :: Dynamic t (Map String String) -- ^ <table> attrs
+                , _gridConfig_tableTag :: String -- ^ table tag eg. <table>
+                , _gridConfig_tableAttributes :: Dynamic t (Map String String) -- ^ table tag attrs
                 , _gridConfig_rowHeight :: Int -- ^ row height in px
                 , _gridConfig_extraRows :: Int -- ^ extra rows rendered on top and bottom
                 , _gridConfig_debounce :: NominalDiffTime
@@ -88,6 +89,7 @@ data GridConfig t m k v
 
 instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
   def = GridConfig { _gridConfig_attributes = constDyn ("class" =: "grid-container")
+                   , _gridConfig_tableTag = "table"
                    , _gridConfig_tableAttributes = constDyn ("class" =: "grid-table")
                    , _gridConfig_rowHeight = 30
                    , _gridConfig_extraRows = 2
@@ -263,11 +265,11 @@ gridRowSimple cs k v dsel = do
 
 -- | Grid view.
 grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConfig t m k v -> m (Grid t k v)
-grid (GridConfig attrs tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
+grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
   rec (gridResizeEvent, (table, gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
         gmenu <- gridMenu $ GridMenuConfig cols rows xs selected
-        (table, (ghead, gbody)) <- elDynAttr' "table" tableAttrs $ do
+        (table, (ghead, gbody)) <- elDynAttr' tableTag tableAttrs $ do
           ghead <- gridHead $ GridHeadConfig cs sortState
           gbody <- gridBody $ GridBodyConfig cs rows window selected rowgroupAttrs rowAction
           return (ghead, gbody)
