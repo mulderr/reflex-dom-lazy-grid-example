@@ -96,7 +96,7 @@ instance (MonadWidget t m, Ord k) => Default (GridConfig t m k v) where
                    , _gridConfig_debounce = 0.01
                    , _gridConfig_columns = constDyn mempty
                    , _gridConfig_rows = constDyn mempty
-                   , _gridConfig_selectionStrategy = selectSingle
+                   , _gridConfig_selectionStrategy = selectNone
                    , _gridConfig_menuWidget = gridMenuSimple
                    , _gridConfig_headWidget = gridHeadSimple
                    , _gridConfig_bodyWidget = gridBodySimple
@@ -343,6 +343,10 @@ grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols ro
     toSortState :: Event t k -> m (Dynamic t (GridOrdering k))
     toSortState = foldDyn f def
       where f k (GridOrdering pk v) = GridOrdering k (if k == pk then (nextSort v) else SortAsc)
+
+-- | No row selection.
+selectNone :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
+selectNone _ = id
 
 -- | Single row selection.
 selectSingle :: Ord k => ((k, k), v) -> Rows k v -> Rows k v
