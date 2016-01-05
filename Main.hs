@@ -37,8 +37,9 @@ main = mainWidgetWithCss $(embedFile "style.css") gridExample
 
 gridExample :: MonadWidget t m => m ()
 gridExample = do
-  rec metaData <- myGridView "500.json" reloadDataE
-      reloadDataE <- myDescription metaData
+  pb <- getPostBuild
+  rec metaData <- myGridView $ leftmost [reloadE, "500.json" <$ pb]
+      reloadE <- myDescription metaData
   return ()
 
 myDescription :: MonadWidget t m => Grid t Int Employee -> m (Event t String)
@@ -111,14 +112,11 @@ myDescription g = do
     return e
 
 myGridView :: (MonadWidget t m)
-  => String           -- ^ JSON file to display by default
-  -> Event t String   -- ^ Event with path to JSON data
+  => Event t String   -- ^ Event with path to JSON data
   -> m (Grid t Int Employee)
-myGridView defFile reloadE = do
-  pb <- getPostBuild
-
+myGridView reloadE = do
   let toReq filename = xhrRequest "GET" filename def
-  asyncReq <- performRequestAsync $ fmap toReq $ leftmost [reloadE, defFile <$ pb]
+  asyncReq <- performRequestAsync $ fmap toReq reloadE
 
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
