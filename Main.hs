@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings, RecursiveDo, ScopedTypeVariables, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, RecursiveDo, ScopedTypeVariables, TemplateHaskell, DeriveGeneric #-}
 module Main where
 
 import           Control.Lens
@@ -13,6 +13,8 @@ import qualified Data.Map as Map
 import           Safe
 import           Data.Traversable (forM)
 
+import           GHC.Generics
+
 import           Reflex
 import           Reflex.Dom
 
@@ -25,13 +27,10 @@ data Employee = Employee
   , company :: String
   , employed :: Bool
   }
-  deriving (Eq, Show)
+  deriving (Generic, Eq, Show)
 
-instance FromJSON Employee where
-  parseJSON (Object v) = Employee <$> v .: "firstName"
-                                  <*> v .: "lastName"
-                                  <*> v .: "company"
-                                  <*> v .: "employed"
+instance FromJSON Employee
+
 
 main :: IO ()
 main = mainWidgetWithCss $(embedFile "style.css") gridExample
