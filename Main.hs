@@ -11,7 +11,7 @@ import           Data.Monoid ((<>))
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Safe
-import           Data.Traversable (forM)
+import           Data.Foldable (forM_)
 
 import           GHC.Generics
 
@@ -48,7 +48,7 @@ myDescription g = do
     el "h2" $ text "Reflex-dom lazy grid demo"
     el "p" $ do
       text "Features:"
-      el "ul" $ forM
+      el "ul" $ forM_
         [ "allows semantic markup, although by default a non standard <x-rowgroup> tag is used for positioning of visible rows (for perfomance)"
         , "single column sorting"
         , "multiple column filtering"
@@ -128,7 +128,7 @@ myGridView reloadE = do
              -- we want to show off conditional formatting, normally it's fine to stick with the default
              & gridConfig_rowAction .~ \cs k v dsel -> do
                 attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
-                (e, _) <- elDynAttr' "tr" attrs $ forM cs $ \c ->
+                (e, _) <- elDynAttr' "tr" attrs $ forM_ cs $ \c ->
                   let t = (_colValue c) k v
                       attrs = _colAttrs c <> case _colName c of
                                                "employed" -> if t == "0" then "class" =: "red" else mempty
