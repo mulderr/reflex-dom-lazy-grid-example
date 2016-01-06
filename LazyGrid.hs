@@ -42,6 +42,9 @@ data Column k v = Column
 instance Eq (Column k v) where
   x == y = _colName x == _colName y
 
+instance Show (Column k v) where
+  show = _colName
+
 instance Default (Column k v) where
   def = Column { _colName = ""
                , _colHeader = ""
@@ -67,6 +70,7 @@ nextSort SortDesc = SortNone
 nextSort s = succ s
 
 data GridOrdering k = GridOrdering k SortOrder
+  deriving (Eq, Show)
 
 instance Default k => Default (GridOrdering k) where
   def = GridOrdering def def
@@ -177,18 +181,16 @@ gridFilter cols fs xs = Map.foldrWithKey (applyOne cols) xs fs
 
 -- | Apply column sorting to a set of rows.
 gridSort :: (Ord k, Enum k) => Columns k v -> GridOrdering k -> Rows k v -> Rows k v
-gridSort cols (GridOrdering k sortOrder) xs =
-  case (maybeSortFunc k cols) of
-    Nothing -> xs
-    Just f -> Map.fromList $ reorder $ f $ Map.toList xs
+gridSort cols (GridOrdering k sortOrder) = Map.fromList . sort . Map.toList
   where
+    sort = reindex . maybe id id (maybeSortFunc k cols)
     maybeSortFunc k cols = Map.lookup k cols >>= _colCompare >>= \f ->
       let f' = (\(_, v1) (_, v2) -> f v1 v2)
       in case sortOrder of
         SortNone -> Nothing
         SortAsc -> return $ sortBy f'
         SortDesc -> return $ sortBy (flip f')
-    reorder = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [(toEnum 1)..]
+    reindex = zipWith (\n ((_, k2), v) -> ((n, k2), v)) [(toEnum 1)..]
 
 -- | Keeps the window updated based on scroll position and body height.
 gridWindowManager :: forall t m k v . (MonadWidget t m, Ord k)
@@ -321,7 +323,7 @@ gridRowSimple cs k v dsel = do
   return el
 
 -- | Grid view.
-grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k, Show k, Show v) => GridConfig t m k v -> m (Grid t k v)
+grid :: forall t m k v . (MonadWidget t m, Ord k, Enum k, Default k) => GridConfig t m k v -> m (Grid t k v)
 grid (GridConfig attrs tableTag tableAttrs rowHeight extra debounceDelay cols rows rowSelect gridMenu gridHead gridBody rowAction) = do
   pb <- getPostBuild
   rec (gridResizeEvent, (table, gmenu, ghead, (GridBody tbody sel))) <- resizeDetectorDynAttr attrs $ do
