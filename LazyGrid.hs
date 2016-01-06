@@ -204,7 +204,7 @@ gridWindowManager rowHeight extra height scrollTop xs = do
   firstIndex <- (return . nubDyn) =<< foldDyn toFirstIdx 0 (updated scrollTop)
   windowSize <- (return . nubDyn) =<< mapDyn toWindowSize height
   window <- combineDyn3 toWindow firstIndex windowSize xs
-  attrs <- combineDyn toWindowAttrs firstIndex =<< mapDyn Map.size xs
+  attrs <- (return . nubDyn) =<< combineDyn toWindowAttrs firstIndex =<< mapDyn Map.size xs
   return $ GridWindow firstIndex windowSize window attrs
   where
     -- first index parity must be stable not to have the zebra "flip" when using css :nth-child
@@ -227,7 +227,6 @@ gridWindowManager rowHeight extra height scrollTop xs = do
     -- - height - includes content height and offset from the bottom
     -- the main invariant being:
     --   rowCount * rowHeight = top + height
-    -- rowCount * rowHeight = top + height
     toWindowAttrs :: Int -> Int -> Map String String
     toWindowAttrs firstIdx rowCount =
       let total = rowCount * rowHeight
