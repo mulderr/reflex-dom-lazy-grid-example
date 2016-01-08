@@ -33,7 +33,7 @@ instance FromJSON Employee
 
 
 main :: IO ()
-main = mainWidgetWithCss $(embedFile "style.css") gridExample
+main = mainWidgetWithCss ($(embedFile "grid.css") <> $(embedFile "style.css")) gridExample
 
 gridExample :: MonadWidget t m => m ()
 gridExample = do
