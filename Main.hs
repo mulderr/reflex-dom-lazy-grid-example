@@ -18,7 +18,7 @@ import           GHC.Generics
 import           Reflex
 import           Reflex.Dom
 
-import           LazyGrid
+import           Reflex.Dom.LazyGrid
 
 
 data Employee = Employee
