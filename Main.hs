@@ -53,6 +53,7 @@ myDescription g = do
         , "single column sorting"
         , "multiple column filtering"
         , "column selection"
+        , "row selection"
         , "fixed width columns through custom column attrs"
         , "conditional formatting using the row creating action"
         , "csv export (using html5 createObjectURL, not supported on older browsers)"
@@ -107,7 +108,10 @@ myDescription g = do
                       <> " this is possible due to the privision that the window always starts with an odd row"
 
     el "p" $ do
-      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "Code on Github"
+      text "Code on Github: "
+      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "example"
+      text " "
+      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid") $ text "component"
 
     return e
 
