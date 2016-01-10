@@ -12,10 +12,16 @@ build-type:          Simple
 -- extra-source-files:  
 cabal-version:       >=1.10
 
-executable table2
-  main-is:             Main.hs
-  -- other-modules:       
-  other-extensions:    DeriveGeneric
-  build-depends:       base >=4.8 && <4.9, aeson >=0.9 && <0.10, hashmap >=1.3 && <1.4
-  -- hs-source-dirs:      
+executable reflex-dom-lazy-grid-example
   default-language:    Haskell2010
+  main-is:             Main.hs
+  build-depends:       aeson        >= 0.9      && < 0.10,
+                       base         >= 4.8      && < 4.9,
+                       containers   >= 0.5      && < 0.6,
+                       file-embed   >= 0.0.9    && < 0.1,
+                       hashmap      >= 1.3      && < 1.4,
+                       lens         >= 4.0      && < 5.0,
+                       reflex       >= 0.3.2    && < 0.4,
+                       reflex-dom   >= 0.2      && < 0.3,
+                       reflex-dom-lazy-grid >= 0.1 && < 0.2,
+                       safe         >= 0.3      && < 0.4

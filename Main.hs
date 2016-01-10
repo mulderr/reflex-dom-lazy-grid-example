@@ -6,7 +6,6 @@ import           Data.Aeson
 import           Data.Char (toLower)
 import           Data.FileEmbed
 import           Data.List (isInfixOf)
-import           Data.Maybe (fromJust)
 import           Data.Monoid ((<>))
 import           Data.Map (Map)
 import qualified Data.Map as Map
@@ -123,7 +122,7 @@ myGridView reloadE = do
   asyncReq <- performRequestAsync $ fmap toReq reloadE
 
   xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
-    >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromJust)
+    >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . maybe [] id)
 
   grid $ def & attributes .~ constDyn ("class" =: "my-grid")
              & gridConfig_columns .~ constDyn columns
