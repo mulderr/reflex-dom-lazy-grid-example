@@ -2,142 +2,117 @@
 module Main where
 
 import           Control.Lens
+import           Control.Monad
 import           Data.Aeson
+import           Data.Bool (bool)
 import           Data.Char (toLower)
-import           Data.FileEmbed
 import           Data.List (isInfixOf)
+import           Data.Maybe (fromMaybe)
 import           Data.Monoid ((<>))
 import           Data.Map (Map)
 import qualified Data.Map as Map
-import           Safe
-import           Data.Foldable (forM_)
-
 import           GHC.Generics
-
+import           Safe (headDef)
 import           Reflex
 import           Reflex.Dom
 
 import           Reflex.Dom.LazyGrid
 
 
-data Employee = Employee
-  { firstName :: String
-  , lastName :: String
-  , company :: String
-  , employed :: Bool
-  }
-  deriving (Generic, Eq, Show)
+data Employee
+  = Employee { firstName :: String
+             , lastName :: String
+             , company :: String
+             , employed :: Bool
+             } deriving (Generic, Eq, Show)
 
 instance FromJSON Employee
 
 
 main :: IO ()
-main = mainWidgetWithCss (lazyGridCss <> $(embedFile "style.css")) gridExample
+main = mainWidgetWithHead headWidget gridExample
+
+headWidget :: MonadWidget t m => m ()
+headWidget = do
+  elAttr "meta" ("charset" =: "utf-8") blank
+  elAttr "meta" ("name" =: "viewport" <> "content" =: "width=device-width, initial-scale=1, shrink-to-fit=no") blank
+  elAttr "meta" ("http-equiv" =: "x-ua-compatible" <> "content" =: "ie=edge") blank
+  el "title" $ text "Lazy grid example"
+  linkCss "https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css"
+  linkCss "grid.css"
+  linkCss "style.css"
+  where
+    linkCss href = elAttr "link" ("href" =: href <> "rel" =: "stylesheet" <> "type" =: "text/css") blank
 
 gridExample :: MonadWidget t m => m ()
 gridExample = do
-  pb <- getPostBuild
-  rec metaData <- myGridView $ leftmost [reloadE, "500.json" <$ pb]
-      reloadE <- myDescription metaData
+  rec g <- gridView ds
+      ds <- description "500" ["50", "500", "10000"] g
   return ()
 
-myDescription :: MonadWidget t m => Grid t Int Employee -> m (Event t String)
-myDescription g = do
-  elClass "div" "description" $ do
-    el "h2" $ text "Reflex-dom lazy grid demo"
-    el "p" $ do
-      text "Features:"
-      el "ul" $ forM_
-        [ "allows semantic markup, although by default a non standard <x-rowgroup> tag is used for positioning of visible rows (for perfomance)"
-        , "single column sorting"
-        , "multiple column filtering"
-        , "column selection"
-        , "row selection"
-        , "fixed width columns through custom column attrs"
-        , "conditional formatting using the row creating action"
-        , "csv export (using html5 createObjectURL, not supported on older browsers)"
-        , "scales to occupy all available space"
-        , "styled after ui-grid (but almost nothing is hardcoded so it should be straightforward to supply a different stylesheet)"
-        ]
-        $ \s -> el "li" $ text s
-    e <- el "p" $ do
-      text "Grab some data (also courtesy of ui-grid):"
-      el "ul" $ do
-        (e1, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "50 rows"
-        (e2, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "500 rows"
-        (e3, _) <- el "li" $ elAttr' "a" ("href" =: "#") $ text "10k rows"
-        return $ leftmost
-          [ "50.json" <$ domEvent Click e1
-          , "500.json" <$ domEvent Click e2
-          , "10000.json" <$ domEvent Click e3
-          ]
+-- | Buttons with optional initial value.
+buttonsMaybe :: MonadWidget t m => Maybe String -> [String] -> m (Dynamic t (Maybe String))
+buttonsMaybe initItem items = divClass "btn-group" $ do
+  rec evs <- forM items $ \i -> do
+        attrs <- forDyn sel $ \ms -> "class" =: ("btn btn-default" <> maybe "" (bool "" " active" . (==i)) ms)
+        (e, _) <- elDynAttr' "button" attrs $ text i
+        return $ Just i <$ domEvent Click e
+      sel <- holdDyn initItem $ leftmost evs
+  return $ nubDyn sel
 
-    el "p" $ do
-      text "Meta:"
-      el "ul" $ do
-        el "li" $ do
-          text "Column count: "
-          dynText =<< mapDyn (show . Map.size) (_grid_columns g)
-        el "li" $ do
-          text "Visible column count: "
-          dynText =<< mapDyn (show . Map.size) (_grid_columnsVisible g)
-        el "li" $ do
-          text "Row count: "
-          dynText =<< mapDyn (show . Map.size) (_grid_rows g)
-        el "li" $ do
-          text "Filtered row count: "
-          dynText =<< mapDyn (show . Map.size) (_grid_rowsFiltered g)
-        el "li" $ do
-          text "Selected row count: "
-          dynText =<< mapDyn (show . Map.size) (_grid_rowsSelected g)
+-- | Buttons where one is always selected.
+buttons:: MonadWidget t m => String -> [String] -> m (Dynamic t String)
+buttons initItem items = do
+  ms <- buttonsMaybe (Just initItem) items
+  mapDyn (fromMaybe initItem) ms
 
-    el "p" $ do
-      text "Selected row:"
-      el "ul" $ listWithKey (_grid_rowsSelected g) $ \k dv -> do
-        v <- sample $ current dv
-        el "li" $ text $ show v
+description :: MonadWidget t m => String -> [String] -> Grid t Int Employee -> m (Dynamic t String)
+description initFile files g = elClass "div" "description" $ do
+  ev <- el "div" $ do
+    text "Dataset size: "
+    sel <- buttons initFile files
+    mapDyn (<> ".json") sel
+  el "div" $ do
+    text "Meta:"
+    el "ul" $ do
+      el "li" $ do
+        text "Column count: "
+        dynText =<< mapDyn (show . Map.size) (_grid_columns g)
+      el "li" $ do
+        text "Visible column count: "
+        dynText =<< mapDyn (show . Map.size) (_grid_columnsVisible g)
+      el "li" $ do
+        text "Row count: "
+        dynText =<< mapDyn (show . Map.size) (_grid_rows g)
+      el "li" $ do
+        text "Filtered row count: "
+        dynText =<< mapDyn (show . Map.size) (_grid_rowsFiltered g)
+      el "li" $ do
+        text "Selected row count: "
+        dynText =<< mapDyn (show . Map.size) (_grid_rowsSelected g)
+  el "div" $ do
+    text "Selected row:"
+    el "pre" $ listWithKey (_grid_rowsSelected g) $ \_ dv -> display dv
+  el "div" $ do
+    text "Code on Github: "
+    elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "example"
+    text " "
+    elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid") $ text "component"
+  return ev
 
-    el "p" $ do
-      text "More:"
-      el "ul" $ do
-        el "li" $ do
-          text "apparently a scrollable tbody can be a challenge in and of itself; a bare bones example of how it's currently done can be found "
-          elAttr "a" ("href" =: "https://jsfiddle.net/bakgx0yz/1/") $ text "here"
-        el "li" $ text $ "zebra is done using css :nth-child without any attrs generated in code;"
-                      <> " this is possible due to the privision that the window always starts with an odd row"
-
-    el "p" $ do
-      text "Code on Github: "
-      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid-example") $ text "example"
-      text " "
-      elAttr "a" ("href" =: "https://github.com/mulderr/reflex-dom-lazy-grid") $ text "component"
-
-    return e
-
-myGridView :: (MonadWidget t m)
-  => Event t String   -- ^ Event with path to JSON data
+gridView :: (MonadWidget t m)
+  => Dynamic t String
   -> m (Grid t Int Employee)
-myGridView reloadE = do
-  let toReq filename = xhrRequest "GET" filename def
-  asyncReq <- performRequestAsync $ fmap toReq reloadE
-
-  xs <- holdDyn (Just []) (fmap decodeXhrResponse asyncReq)
-    >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . maybe [] id)
-
+gridView dataset = do
+  pb <- getPostBuild
+  let req fname = xhrRequest "GET" fname def
+  asyncReq <- performRequestAsync $ req <$> leftmost [updated dataset, tagDyn dataset pb]
+  xs <- holdDyn (Just []) (decodeXhrResponse <$> asyncReq)
+    >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromMaybe [])
   grid $ def & attributes .~ constDyn ("class" =: "my-grid")
              & gridConfig_columns .~ constDyn columns
              & gridConfig_rows .~ xs
              & gridConfig_selectionStrategy .~ selectSingle
-             -- we want to show off conditional formatting, normally it's fine to stick with the default
-             & gridConfig_rowAction .~ \cs k v dsel -> do
-                attrs <- forDyn dsel $ \s -> if s then ("class" =: "grid-row-selected") else mempty
-                (e, _) <- elDynAttr' "tr" attrs $ forM_ cs $ \c ->
-                  let t = (_colValue c) k v
-                      attrs = _colAttrs c <> case _colName c of
-                                               "employed" -> if t == "0" then "class" =: "red" else mempty
-                                               _ -> mempty
-                  in elAttr "td" attrs $ text t
-                return e
 
 columns :: Map Int (Column Int Employee)
 columns = Map.fromList $ zip [1..]
@@ -158,7 +133,6 @@ columns = Map.fromList $ zip [1..]
         , _colFilter   = Just $ matchIgnoreCase lastName
         , _colCompare  = Just (\a b -> lastName a `compare` lastName b)
         }
-  -- example of a column computed from two fields
   , def { _colName     = "initials"
         , _colHeader   = "Initials"
         , _colValue    = const initials
