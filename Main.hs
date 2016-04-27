@@ -77,7 +77,7 @@ description initFile files g = elClass "div" "description" $ do
     el "ul" $ do
       el "li" $ do
         text "Column count: "
-        dynText =<< mapDyn (show . Map.size) (_grid_columns g)
+        text . show . Map.size . _grid_columns $ g
       el "li" $ do
         text "Visible column count: "
         dynText =<< mapDyn (show . Map.size) (_grid_columnsVisible g)
@@ -110,7 +110,7 @@ gridView dataset = do
   xs <- holdDyn (Just []) (decodeXhrResponse <$> asyncReq)
     >>= mapDyn (Map.fromList . zip (map (\x -> (x, x)) [1..]) . fromMaybe [])
   grid $ def & attributes .~ constDyn ("class" =: "my-grid")
-             & gridConfig_columns .~ constDyn columns
+             & gridConfig_columns .~ columns
              & gridConfig_rows .~ xs
              & gridConfig_selectionStrategy .~ selectSingle
 
