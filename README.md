@@ -1,6 +1,6 @@
 ## Example usage of Reflex.Dom.LazyGrid
 
-See [`Reflex.Dom.LazyGrid`](https://github.com/mulderr/reflex-dom-lazy-grid).
+See [`reflex-dom-lazy-grid`](https://github.com/mulderr/reflex-dom-lazy-grid).
 
 ### How to build
 
